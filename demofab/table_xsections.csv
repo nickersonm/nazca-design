@@ -1,0 +1,12 @@
+origin,xsection,xsection_foundry,stub
+bright,MetalDC,MetalDC,MetalDCStub
+bright,MetalDCStub,,
+bright,MetalRF,MetalRF,MetalRFStub
+bright,MetalRFStub,,
+bright,Shallow,Shallow,ShallowStub
+bright,ShallowStub,,
+bright,Deep,Deep,DeepStub
+bright,DeepStub,,
+bright,Active,,Active
+bright,Cell_Boundary,Cell_Boundary,CellStub
+bright,CellStub,,

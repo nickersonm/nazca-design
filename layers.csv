@@ -1,0 +1,14 @@
+Name,Number,Datatype,Accuracy,frame-color,fill-color,frame-brightness,fill-brightness,dither-pattern,valid,visible,transparent,width,marked,animation
+Inspect shallow,1,0,0.1,#0080ff,#0080ff,16,64,I0,true,true,false,1,false,0
+Inspect deep,2,0,0.1,#0080ff,#0080ff,0,0,I3,true,true,false,1,false,0
+Waveguide,10,0,0.001,#0080ff,#80ff8d,0,0,I0,true,false,false,1,false,0
+Trench,12,0,0.1,#ff00ff,#ff00ff,304,304,I0,true,true,true,0,false,0
+Deeparea,4,0,0.1,#c0c0c0,#c0c0c,192,192,I0,true,true,true,0,false,0
+Pmetal,34,0,0.1,#ff8000,#ff8000,0,0,I2,true,true,true,1,false,0
+Plating,36,0,0.1,#805000,#805000,0,0,I9,true,true,false,1,false,0
+Active,52,0,0.1,#000000,#000000,0,0,I2,true,true,false,1,false,0
+Contact,54,0,0.1,#ff0000,#ff0000,0,0,I8,true,true,false,1,false,0
+Annotation,220,0,0.1,#ff00ff,#ff00ff,0,0,I0,true,true,false,1,false,0
+Pin_inside,230,0,0.1,#00aa00,#00aa00,0,0,I0,true,true,false,1,false,0
+Pin_outside,230,1,0.1,#cc0000,#cc0000,0,0,I0,true,true,false,1,false,0
+Pin_text,230,2,0.1,#000000,#000000,0,0,I0,true,true,false,1,false,0
