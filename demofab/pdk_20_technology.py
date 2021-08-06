@@ -38,33 +38,35 @@ to a waveguide or metal line. The following properies of the xsection can be set
 """
 
 
-
 import os
 import nazca as nd
 from math import copysign
 
-# full path of the (demo) directory that has __init__ file.
+
+# Store the path to the demopdk directory (= path of this file).
 dir_path = os.path.dirname(__file__)
+
+# gds based BB are to be stored (and found) in the gdsBB subdir.
 gds_path = os.path.join(dir_path, 'gdsBB/')
 
 
 #==============================================================================
-# Load Demo foundry layers from tables store as csv files.
+# Load DemoPDK layers from the csv tables
 #==============================================================================
+# define full path filenames
 layer_file           = os.path.join(dir_path, 'table_layers.csv')
-xsection_layer_file  = os.path.join(dir_path, 'table_xsection_layer_map.csv')
 xsection_file        = os.path.join(dir_path, 'table_xsections.csv')
+xsection_layer_file  = os.path.join(dir_path, 'table_xsection_layer_map.csv')
 layercolor_file      = os.path.join(dir_path, 'table_colors_Light.csv')
-
-#load the foundry tables
+# load the tables
 nd.load_layers(filename=layer_file)
 nd.load_xsections(filename=xsection_file)
 nd.load_xsection_layer_map(filename=xsection_layer_file)
 nd.load_layercolors(filename=layercolor_file)
 
-
 nazca_logo_layers = {'ring':1, 'box':None, 'bird':11}
 nazca_logo = nd.nazca_logo(nazca_logo_layers)
+
 
 #==============================================================================
 # Define xsection related functions as needed.
@@ -103,14 +105,15 @@ def os_deep(width, radius):
 
 
 #==============================================================================
-# xsection attributes
+# Create xsections and add standard attributes
+# If a xsection already exists it will be resued/exended
 #==============================================================================
-xsShallow = nd.add_xsection('Shallow')
-xsShallow.os = os_shallow
-xsShallow.width = 3.0
-xsShallow.radius = 200.0
-xsShallow.minimum_radius = 200.0
-xsShallow.taper = 50.0
+xsShallow = nd.add_xsection('Shallow')  # create (or reuse) a xsection object
+xsShallow.os = os_shallow  #  set straight-to-bend-offset
+xsShallow.width = 3.0  # set default width
+xsShallow.radius = 200.0  # set default radius
+xsShallow.minimum_radius = 200.0  # DRC: set minimum allowed radius
+xsShallow.taper = 50.0  #  set default taper length
 
 xsDeep = nd.add_xsection('Deep')
 xsDeep.os = os_deep
@@ -133,19 +136,21 @@ xsMetalRF.taper = 50.0
 
 
 # =============================================================================
-# DRC
+# pin2pin connection DRC
 # =============================================================================
-# No angle DRC for the metal:
-nd.get_xsection('MetalDC').drc_angle = False # Allow for all angles: skip the angle drc.
-nd.get_xsection('MetalRF').drc_angle = False # Allow for all angles: skip the angle drc.
-nd.get_xsection('MetalDC').drc_width = False # Allow for non-equal width connections.
-nd.get_xsection('MetalRF').drc_width = False # Allow for non-equal width connections.
+# Switch off angle DRC for metal:
+xsMetalDC.drc_angle = False  # Allow for all angles: skip the angle drc.
+xsMetalRF.drc_angle = False  # Allow for all angles: skip the angle drc.
+
+# Switch off width DRC for  metal:
+xsMetalDC.drc_width = False  # Allow for non-equal width connections.
+xsMetalRF.drc_width = False  # Allow for non-equal width connections.
 
 # Allow xsections to be connected to others than itself.
 nd.cfg.drc_rule_xs = {
     'MetalDC': ['MetalDC', 'MetalRF'],
     'MetalRF': ['MetalDC', 'MetalRF'],
-    }
+}
 
 
 

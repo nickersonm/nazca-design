@@ -17,13 +17,15 @@
 # along with Nazca.  If not, see <http://www.gnu.org/licenses/>.
 #-----------------------------------------------------------------------
 #==============================================================================
-# (c) 2017 Katarzyna Lawniczuk, Ronald Broeke
+# (c) 2017-2021 Katarzyna Lawniczuk, Ronald Broeke
 #==============================================================================
 
 """
 **DEMO PDK material settings.**
 
 This module is intended to define the material models and materials used in the DEMOfab.
+
+Note that for layout purposes this module is not required.
 """
 
 import nazca as nd
@@ -32,11 +34,14 @@ import nazca as nd
 #==============================================================================
 # Materials
 #==============================================================================
-#define material refractive functions:
+# Define material refractive functions:
+# The call must have parameters call (wl, pol, **kwargs) 
 def N(wl, pol, **kwargs):
     return 3.5+0.1*wl+pol
 
-#Define materials. Use value or functions to set the refractive index:
+
+# Define material objects. 
+# Use a value or a functions to set the refractive index:
 InP  = nd.xsection.Material(Nmat=3.2, name='InP',  rgb=(0.0, 0.4, 0.9))
 Q125 = nd.xsection.Material(Nmat=N,   name='Q125', rgb=(0.0, 0.8, 0.3))
 air  = nd.xsection.Material(Nmat=1.0, name='air',  rgb=(0.95, 0.95, 1.0))

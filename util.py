@@ -390,16 +390,18 @@ def polyline_length(xy):
     return length
 
 
-def polyline2polygon(
+def polyline2polygons(
     xy,
     width=2.0,
     width2=None,
     parabolic=True,
     miter=0.5,
     anglei=None,
-    angleo=None
+    angleo=None,
+    split=True,
 ):
-    """Return a polygon that contains the outline points of a polyline with given width.
+    """Return a list of polygons that contain the outline points of a polyline
+    with given width.
 
     Since we have to specify the outline of two or more segments that make
     an angle, we have to know what to do with the gap between those
@@ -416,7 +418,7 @@ def polyline2polygon(
     and from the bottom with the clockwise points.
 
     Args:
-        xy (list): list of (x,y) points that hold the polygon
+        xy (list): list of (x,y) points that holds the polygon
         width (float | list | function): width of the polyline (default 2), or a
             parameterized function w(t) returning the width for the independent
             variable t wich runs from 0 to 1 from start of the polyline to the
@@ -428,18 +430,23 @@ def polyline2polygon(
             parabolic tapering, or linear tapering if False (default True).
         miter (float): maximum fraction of the width before an extra point
             is added in outside corners (default=0.5).
-        anglei (float): force input side angle in degrees (default=None, perpendicular to polyline).
-            Useful if the last polyline segment is slightly short of the final desired angle.
-        angleo (float): force output side angle  in degrees (default=None, perpendicular to polyline)
-            Useful if the last polyline segment is slightly short of the final desired angle.
+        anglei (float): force input side angle in degrees (default=None,
+            perpendicular to polyline). Useful if the last polyline segment is
+            slightly short of the final desired angle.
+        angleo (float): force output side angle  in degrees (default=None,
+            perpendicular to polyline) Useful if the last polyline segment is
+            slightly short of the final desired angle.
+        split (bool): if the number of points becomes too large, split the polygon.
 
     Returns:
-        list of (float, float): the polygon
+        list of polygons: the polygons are each lists of coordinates (float, float).
     """
+    # Each iteration can add 3 points and 2 for the closing polygon
+    nmax = nd.cfg.maxpolygonpoints - 5
     n = len(xy)
     if n < 2:
         raise ValueError(
-            "Polyline2polygon: need at least 2 points for polyline.")
+            "Polyline2polygons: need at least 2 points for polyline.")
 
     # start angle correction
     # TODO: update xy for anglei and angleo at the start.
@@ -517,7 +524,7 @@ def polyline2polygon(
     elif isinstance(width, list):
         # List of width: should have the same length as xy
         if len(width) != n:
-            raise ValueError('Polyline2polygon: length of xy needs '
+            raise ValueError('Polyline2polygons: length of xy needs '
                 'to match length of width.')
         w = width
         dsqrmax = [(miter * w)**2 for w in width]
@@ -529,7 +536,7 @@ def polyline2polygon(
         # that two points are needed (miter limit).
         dsqrmax = [(miter * width(x))**2 for x in t]
     else:
-        raise ValueError("Polyline2polygon: don't know what to do with "
+        raise ValueError("Polyline2polygons: don't know what to do with "
              "this width parameter: {}.".format(width))
 
     # Start with the first two points:
@@ -537,6 +544,7 @@ def polyline2polygon(
     xyt = [tr1[0]]  # Top coordinates of polygon
     xyb = [tr1[3]]  # Bottom coordinates of polygon
 
+    XY = []  # List of polygons to be returned
     # loop over the points in the polyline:
     for i in range(1, n - 1):
         tr0 = tr1  # Current and next trapezoid
@@ -569,11 +577,56 @@ def polyline2polygon(
         else:
             xyt.append(tr0[1])
             xyb.append(tr0[2])
+        # Start a new polygon if the number of points becomes too large.
+        if split and len(xyt) + len(xyb) >= nmax:
+            XY.append(xyt + list(reversed(xyb)))
+            xyt = [xyt[-1]]
+            xyb = [xyb[-1]]
 
     # Last two points:
     xyt.append(tr1[1])
     xyb.append(tr1[2])
-    return xyt + list(reversed(xyb))
+    XY.append(xyt + list(reversed(xyb)))
+    return XY
+
+
+def polyline2polygon(
+    xy,
+    width=2.0,
+    width2=None,
+    parabolic=True,
+    miter=0.5,
+    anglei=None,
+    angleo=None,
+):
+    """Return a polygon that contains the outline points of a polyline with given width.
+
+    Args:
+        xy (list): list of (x,y) points that holds the polygon
+        width (float | list | function): width of the polyline (default 2), or a
+            parameterized function w(t) returning the width for the independent
+            variable t wich runs from 0 to 1 from start of the polyline to the
+            end, proportional to the length of the polyline segments.
+        width2 (float): if width is a number, and if width2 is not None, they
+            are interpreted as the start width and end width2 with a parabolic
+            change of width vs length.
+        parabolic (bool): if begin and end widths are specified as numbers, use
+            parabolic tapering, or linear tapering if False (default True).
+        miter (float): maximum fraction of the width before an extra point
+            is added in outside corners (default=0.5).
+        anglei (float): force input side angle in degrees (default=None,
+            perpendicular to polyline). Useful if the last polyline segment is
+            slightly short of the final desired angle.
+        angleo (float): force output side angle  in degrees (default=None,
+            perpendicular to polyline) Useful if the last polyline segment is
+            slightly short of the final desired angle.
+
+    Returns:
+        list of (float, float): the polygon.
+    """
+    return polyline2polygons(xy=xy, width=width, width2=width2,
+            parabolic=parabolic, miter=miter, anglei=anglei, angleo=angleo,
+            split=False)[0]
 
 
 def polyline2edge(
@@ -588,10 +641,10 @@ def polyline2edge(
     line=False,
 ):
     """Return a polygon that contains the outline points of a polyline with
-    given width .
+    given width.
 
-    This method is based on edges a1*width + b1 and a2*width + b2
-    and it does not assume symmetry alone the spine.
+    This method is based on edges a1 * width + b1 and a2 * width + b2
+    and it does not assume symmetry along the spine.
 
     Since we have to specify the outline of two or more segments that make
     an angle, we have to know what to do with the gap between those
@@ -619,7 +672,8 @@ def polyline2edge(
             parabolic tapering, or linear tapering if False (default True).
         miter (float): maximum fraction of the width before an extra point
             is added in outside corners (default 0.5).
-        line (bool): Return onle spine if True (default=False)
+        line (bool): Return only a spine (line) if True (default=False).
+            The spine will be in the center of the edges as set by xy, width1 and widht2.
 
     Returns:
         list of (float, float): the polygon
@@ -844,27 +898,30 @@ def transform_polygon(points, dx=0.0, dy=0.0, da=0.0, scale=1.0, flipx=False,
 
 
 def read_and_filter_ascii(filename):
-    """Read ascii layout export and delete time-stamp records for diff.
+    """Read ascii layout export and delete some lines for diff: lines that
+    contain a date/time ('bgnstr' and 'bgnlib') and the libname line, which can
+    differ in length and in content.
 
     Args:
         filename (str): ascii layout file to read and filter.
 
     Returns:
-        str: ascii layout in <filename> output minus time stamps
+        str: ascii layout in <filename> output minus problematic lines
     """
-    file = ''
-    bgnstr = 1
     with open(filename, 'r') as fref:
-        while True:
-            line = fref.readline()
-            bgnstr += 1
-            if ('bgnstr' in line) or ('bgnlib' in line) or ('libname' in line):
-                bgnstr = 0
-            if bgnstr != 1:
-                file += line
-            if line == '':
-                break
-    return file
+        ref = fref.readlines()
+    lineiter = iter(ref)
+    file = []
+    for line in lineiter:
+        if (
+            line.startswith("bgnstr")
+            or line.startswith("bgnlib")
+            or line.startswith("libname")
+        ):
+            next(lineiter)
+            continue
+        file.append(line)
+    return ''.join(file)
 
 
 def instantiate_full_nazca_tree():
@@ -907,3 +964,60 @@ def multisub(submapping, subject):
     replace = lambda m: substs[m.lastindex - 1]
     return re.sub(pattern, replace, subject)
 
+
+def Tp_fan(N=2):
+    """Tempate function for method fan with a closure on N
+   
+    This allows to define the fan() function with a preset N.
+
+    Returns:
+        function: fan for N.
+    """
+    def fan(y1=0, y2=1, i=0, N=N):
+        """Auxilary fanout normalization function to scale functions for an N-ribbon.
+
+        Note that there is always a zero point in the interval i in [0, N-1],
+        Hence for both y1 and y2 positive the function will be a v-shape in i.
+
+        Args:
+            y1 (float): value at i=0
+            y2 (float): value at i=N-1
+            N (int): number of point
+            i (int): counter between 0 and N (not including N)
+
+        Returns:
+            float: intermediate value for at i.
+        """
+        if y1 * y2 < 0:
+            return y1 + ((y2 - y1) * i / (N - 1))
+        else:
+            return abs(y1 - abs((y1 + y2) * i / (N - 1)))
+    return fan
+
+
+def fan(y1, y2, i, N):
+     """Auxilary fanout normalization function to scale functions for a N-ribbon.
+
+     Note that there is always a zero point in the interval i in [0, N-1],
+     Hence for both y1 and y2 positive the function will be a v-shape in i.
+
+     Args:
+         y1 (float): value at i=0
+         y2 (float): value at i=N-1
+         N (int): number of point
+         i (int): counter between 0 and N (not including N)
+
+     Returns:
+         float: intermediate value for at i.
+     """
+     if y1 * y2 < 0:
+         return y1 + ((y2 - y1) * i / (N - 1))
+     else:
+         return abs(y1 - abs((y1 + y2) * i / (N - 1)))
+
+
+if __name__ == "__main__":
+    fanN = Tp_fan(N=8)
+    print(fanN(1, -1, 0))
+    print(fanN(1, -1, 7))
+    print(fan(1, -1, 7, 8))

@@ -19,18 +19,31 @@
 
 
 class Sim():
-    def __init__(self, R=0, wl=1.55, pol=0):
+    def __init__(self, wl=1.55, pol=0, modes=(0, 1)):
+        """"Initilialize golbl simulation settings.
+
+        Args:
+            wl (float); wavelength
+            pol (int): polarization
+            modes (tuple): list of modes to built a netlist for. Set to () for none.
+
+        Returns:
+            None
+        """
         self.wl = wl
         self.pol = pol
-        self.R = R
+        self.modes = modes
+        #self.radius = radius
 
     def __str__(self):
-        s = ('Global simulation settings:\n')
-        s += ('    wl  = %.3f\n' % (self.wl))
-        s += ('    pol = %d\n' % (self.pol))
+        s = ("Global simulation settings:\n")
+        s += (f"    wl    = {self.wl:3f}\n")
+        s += (f"    pol   = {self.pol}\n")
+        s += (f"    modes = {self.modes}\n")
         return s
 
 
 sim = Sim()
-sim.wl = 1.55
-sim.pol = 0
+#sim.wl = 1.55
+#sim.pol = 0
+#sim.modes = (0, 1)

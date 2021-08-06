@@ -38,46 +38,33 @@ To see the available building block and their details.
 import os
 import nazca as nd
 import nazca.pdk_template as pdk
-import nazca.interconnects as interconnect
 import nazca.icons as icons
 
-nd.cfg.group_connect = False
-nd.pin2pin_drc_on()
+
 dir_path = os.path.dirname(os.path.abspath(__file__))
+nd.pin2pin_drc_on()  # switch pin2pin DRC on
+nd.cfg.group_connect = False  # switch off group connect in this file to save time (switch on again at bottom).
+BBfunctioncalls = []  # Store PDK BB calls for test and documentation purposes
+
+# Define the version info that will be added as annotation to each PDK cell
 version = {
-    'cellname': 'auto',
-    'version': '0.5',
-    'owner': 'nazca-design.org'
+    'cellname': 'auto',  # 'auto' will replace 'auto' with the actual cellname
+    'version': '0.5',  # version string
+    'owner': 'nazca-design.org',  # building block owner
 }
 
 
-pinstyle = {
-    'size': 1.5,
-    'stub_length': 4.0
-    }
-nd.add_pinstyle(name='default', styledict=pinstyle)
-
-pinstyle = {
-    'shape': 'inv_pointer',
-    'size': 3.0,
-    'stub_length': 5.0
-    }
-nd.add_pinstyle(name='metal', styledict=pinstyle)
+#==============================================================================
+# Optional: Assign xsection objects to variable names for ease of use in this file.
+#==============================================================================
+xsShallow = nd.get_xsection('Shallow')  #: 'Shallow' xsection
+xsDeep    = nd.get_xsection('Deep')     #: 'Deep' xsection
+xsMetalDC = nd.get_xsection('MetalDC')  #: 'MetalDC' xsection
+xsMetalRF = nd.get_xsection('MetalRF')  #: 'MetalRF' xsection
 
 
 #==============================================================================
-# Get xsection settings for use in this file.
-#==============================================================================
-xsShallow = nd.get_xsection('Shallow') #: 'Shallow' xsection
-xsDeep    = nd.get_xsection('Deep')    #: 'Deep' xsection
-xsMetalDC = nd.get_xsection('MetalDC') #: 'MetalDC' xsection
-xsMetalRF = nd.get_xsection('MetalRF') #: 'MetalRF' xsection
-xsMetalDC.pinstyle = 'metal'
-xsMetalRF.pinstyle = 'metal'
-
-
-#==============================================================================
-# Get xsection parameter settings for use in this file.
+# Optional: Assign xsection parameter settings for ease of use in this file.
 #==============================================================================
 wshal  = xsShallow.width
 Rshal  = xsShallow.radius
@@ -91,15 +78,46 @@ wact   = 2.0
 
 
 #==============================================================================
+# Optional: define (multiple) pin styles and assign them to xsections
+# See cfg.py pinstylelabels for all style options
+#==============================================================================
+nd.add_pinstyle(
+    name='default', 
+    styledict={ 
+        'size': 1.5,  # size of the pin shape (by default an arrow)
+        'stub_length': 4.0,  # length of the stub in um
+    },
+)
+nd.add_pinstyle(
+    name='metal', 
+    styledict={
+        'shape': 'inv_pointer',  # shapes are defined as polygons in cfg.py
+        'size': 3.0,
+        'stub_length': 5.0,
+    },
+)
+# Assign pinstyles to xsections:
+# Note the pinstyle named "default" is assigned of none is specified.
+xsMetalDC.pinstyle = 'metal'
+xsMetalRF.pinstyle = 'metal'
+
+
+#==============================================================================
 # Define Interconnects (settings default to values in the xsection attributes).
 #==============================================================================
-shallow = interconnect.Interconnect(xs='Shallow') #: 'Shallow' interconnects
-deep    = interconnect.Interconnect(xs='Deep')    #: 'Deep' interconnects
-metaldc = interconnect.Interconnect(xs='MetalDC') #: 'MetalDC' interconnects
-metalrf = interconnect.Interconnect(xs='MetalRF') #: 'MetalRF' interconnects
+shallow = nd.interconnects.Interconnect(xs='Shallow')  #: 'Shallow' interconnect
+deep    = nd.interconnects.Interconnect(xs='Deep')     #: 'Deep' interconnect
+metaldc = nd.interconnects.Interconnect(xs='MetalDC')  #: 'MetalDC' interconnect
+metalrf = nd.interconnects.Interconnect(xs='MetalRF')  #: 'MetalRF' interconnect
 
 
-BBfunctioncalls = []
+#==============================================================================
+#
+# BUILDING BLOCKS
+#
+#==============================================================================
+
+
 #==============================================================================
 # waveguide transitions
 #==============================================================================
@@ -213,7 +231,7 @@ BBfunctioncalls.append('mmi2x2_dp()')
 #==============================================================================
 # modulators
 #==============================================================================
-@pdk.hashme('abb_eopm_dc', 'length')
+@pdk.hashme('abb_eopm_dc', 'length')  # Decorator to check for and resuse existing blocks
 def abb_eopm_dc(length=750, contacts=2):
     """Create an electro-optic phase modulator cell.
 
@@ -408,6 +426,7 @@ BBfunctioncalls.append('phase_shifter()')
 
 
 def Tp_isolation(name='isolation', length=100, xs=None, width=None, layer=None):
+    """Template funtion."""
     @pdk.hashme(name, 'length')
     def isolation(length=length):
         """Create a p-isolation cell.
@@ -471,6 +490,7 @@ pad_rf = pdk.Tp_RFpad(
     xs={'c0':'MetalRF'},
     icon=icons.Tp_icon_strt(bufx=0, bufy=5, layer=11)
 )
+BBfunctioncalls.append('pad_rf()')
 
 
 # =============================================================================
@@ -488,15 +508,16 @@ def eopm_dc(length=1000, pads=False, sep=10):
     Returns:
         Cell: eopm element
     """
-    varsinfo = {
+    # Define range checking:
+    varinfo = {
         'length': nd.varinfo(min=0.0, default=length, max=2000.0, type='float', unit='um', doc='length of eopm'),
         'pads': nd.varinfo(min=None, default=pads, max=None, type='bool', unit='null', doc='flag to add pads or not'),
         'sep': nd.varinfo(min=0.0, default=sep, max=500.0, type='float', unit='um', doc='separtions of pads from the soa'),
     }
-    nd.rangecheck(varsinfo)
+    nd.rangecheck(varinfo)
 
     contacts = 2
-    with nd.Cell(hashme=True) as C:
+    with nd.Cell() as C:
         C.version = version
         E1 = abb_eopm_dc(length=length, contacts=contacts).put(0)
         if pads:
@@ -524,14 +545,15 @@ def pd_dc(length=100, pads=False, dy=0):
     Returns:
         Cell: PD element
     """
-    varsinfo = {
+    # Define range checking:
+    varinfo = {
         'length': nd.varinfo(min=0.0, default=length, max=2000.0, type='float', unit='um', doc='length of eopm'),
         'pads': nd.varinfo(min=None, default=pads, max=None, type='bool', unit='null', doc='flag to add pads or not '),
         'dy': nd.varinfo(min=0.0, default=dy, max=500.0, type='float', unit='um', doc='separtions of pads from the soa'),
     }
-    nd.rangecheck(varsinfo)
+    nd.rangecheck(varinfo)
 
-    with nd.Cell(hashme=True) as C:
+    with nd.Cell() as C:
         C.version = version
         E1 = pd(length=length).put(0)
         if pads:
@@ -545,9 +567,6 @@ def pd_dc(length=100, pads=False, dy=0):
 BBfunctioncalls.append('pd_dc()')
 
 
-#==============================================================================
-# Standard IOs
-#==============================================================================
 @pdk.hashme('io', 'shape', 'width', 'bend', 'deep')
 def io(shape=None, width=3.0, bend=False, deep=False):
     """Create an IO cells that for edge coupling waveguide interfaces.
@@ -626,9 +645,6 @@ def io(shape=None, width=3.0, bend=False, deep=False):
     return C
 
 
-# =============================================================================
-# COMPOSITE BBs
-# =============================================================================
 @pdk.hashme('dbr_laser', 'Ldbr1', 'Ldbr2', 'Lsoa', 'Lpm')
 def dbr_laser(Ldbr1=50, Ldbr2=500, Lsoa=750, Lpm=70):
     """Create a parametrized dbr laser building block."""
@@ -670,6 +686,7 @@ BBfunctioncalls.append('dbr_laser()')
 @pdk.hashme('mzi', 'length', 'sep')
 def mzi(length=1000, sep=50):
     with nd.Cell(hashme=True) as mziBB:
+        mziBB.autobbox = True
         mziBB.version = version
         eopm = eopm_dc(length=length, pads=True, sep=40)
         mmi_left  = mmi2x2_dp().put('lc')
@@ -707,7 +724,8 @@ with nd.Cell('awg1x4') as awg1x4:
         filename= os.path.join(dir_path, 'gdsBB', 'AWG_1x4.gds'),
         cellname='awg',
         newcellname='demo_awg',
-        layermap={1:3, 20:'BB'})
+        layermap={1:3, 20:'BB'},
+    )
     awg.put()
 
     nd.Pin('a0', xs='Deep', width=wdeep).put((9.184851e-016, -5, -90))
@@ -721,13 +739,13 @@ with nd.Cell('awg1x4') as awg1x4:
     nd.connect_path(awg1x4.pin['a0'], awg1x4.pin['b1'], 500, [(600, 140)])
     nd.connect_path(awg1x4.pin['a0'], awg1x4.pin['b2'], 700, [(700, 140)])
     nd.connect_path(awg1x4.pin['a0'], awg1x4.pin['b3'], 900, [(800, 140)])
-
-
-    pdk.put_stub(['a0', 'b0', 'b1', 'b2', 'b3'])
+    
+    nd.put_stub(['a0', 'b0', 'b1', 'b2', 'b3'])
 BBfunctioncalls.append('awg1x4')
 
 
-BBcells = [eval(F) for F in BBfunctioncalls]
+def BBcells():
+    return [eval(F) for F in BBfunctioncalls]
 
 
 #==============================================================================

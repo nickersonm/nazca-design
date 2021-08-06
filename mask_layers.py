@@ -95,6 +95,7 @@ mask_layers_attr = ['layer_name', 'xsection', 'layer', 'datatype', 'tech', 'grow
 
 layer_debug = False # flag for debug output to stdout.
 block_load_colors = False
+None_layerflag = False  # register if layer=None message has been issued
 
 
 def _check_duplicates(df, tablename):
@@ -166,6 +167,8 @@ def add_layer(
     Returns:
         DataFrame: Table of mask layers
     """
+    global None_layerflag
+
     isDefault = False
     if unknown:
         # Redirected from get_layer -> layer unknown.
@@ -200,7 +203,7 @@ def add_layer(
                 if layer not in unknown_layers:
                     # TODO: user option to raise exception to correct the error.
                     msg = f"Unknown layer {layer} in get_layer()."\
-                        f" Moving layout content to the dump layer 'dump' instead,"\
+                        f" Moving layout content to the 'dump 'layer 'dump' instead,"\
                         f" because redirect_unknown_layers = True."
                     if isinstance(cfg.gdsload, str):
                         msg += f" Layer found while loading '{cfg.gdsload}'."
@@ -208,11 +211,14 @@ def add_layer(
                     unknown_layers.add(layer)
                 return get_layer('dump')
             elif layer is None:
-                nd.main_logger(f"Using unknown layer name '{name}'. Creating it as 'dump' layer. "
-                    f"Alternatively create this layer explicitly using: "
-                    f"add_layer(name='{name}', layer=(<layerinfo>))",
-                    "warning"
-                )
+                if not None_layerflag:
+                    nd.main_logger(f"Using layer=None. Setting it to 'dump' layer instead. "
+                        f"Alternatively create this layer explicitly using:\n"
+                        f"add_layer(name='{name}', layer=(<layerinfo>))\n"
+                        f"This message is only shown once.",
+                        "warning"
+                    )
+                    None_layerflag = True
                 return get_layer('dump')
 
     else:  # not unknown (not a redirect from get_layer())
@@ -820,30 +826,32 @@ def get_layer(layer, aslist=False):
         LDT = (layer, 0, cfg.default_tech)
 
     status = cfg.layername2LDT_cnt.get(LDT, 0)
-    if status == 1: # unique mapping possible
+    if status == 1:  # unique mapping possible
         if not aslist:
             return cfg.LDT2layername[LDT]
         else:
             return [cfg.LDT2layername[LDT]]
     if status > 1:
-        #if LDT not in cfg.LDT2layername.keys():
+        # if LDT not in cfg.LDT2layername.keys():
         names = [name for name, ldt in cfg.layername2LDT.items() if ldt == LDT]
         if not aslist:
             cfg.LDT2layername[LDT] = names[0]
-            msg = "Non-unique layer identifier used: {0}. "\
-                "Matching layer_names for {0} are {1}. "\
-                "Continuing here with layer_name = '{2}'.".\
-                format(layer, names, cfg.LDT2layername[LDT])
-            if isinstance(cfg.gdsload, str):
-                msg +=  f"It occured when loading gds file '{cfg.gdsload}'. "\
-                    "The message can be removed by mapping the layer explicitly "\
-                    "in the load using the layermap keyword."
-            logger.warning(msg)
+            if cfg.gdsload != cfg.gdsloadstore:  # avoid repeating messages during single gds load
+                msg = "Non-unique layer identifier used: {0}. "\
+                    "Matching layer_names for {0} are {1}. "\
+                    "Continuing here with layer_name = '{2}'.".\
+                    format(layer, names, cfg.LDT2layername[LDT])
+                if isinstance(cfg.gdsload, str):
+                    cfg.gdsloadstore = cfg.gdsload
+                    msg +=  f" It occured when loading gds file '{cfg.gdsload}'. "\
+                        f"This message can be removed by mapping the layer explicitly "\
+                        f"in the load using the layermap keyword, e.g. layermap={{{layer}: '{cfg.LDT2layername[LDT]}'}}"
+                nd.main_logger(msg, "warning")
                 # Note that a non-unique (L, D) becomes tricky when importing GDS;
                 # The GDS format only uses (L, D) as the layer identifier,
                 # and this has to be mapped to a unique layer_name.
-                # The designer has to assign that mapping:
-                # (L, D) -> layer_name to resolve conflicts.
+                # The designer has to assign that in a layermapping:
+                # (L, D) -> layer_name (str) to resolve conflicts.
                 # As a default the first (L, D) defined can be used.
                 # Issue this warning only once in stdout, or move to a log-file.
             return cfg.LDT2layername[LDT]

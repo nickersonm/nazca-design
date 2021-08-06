@@ -449,7 +449,7 @@ class Package2():
                 farea = geom.box(width=self.fiberarea, length=faa_len)
                 poly = nd.Polygon(layer=fiberIOlayer, points=farea)
                 poly.put(-faa_len-0.5*self.cleave, 0.5*dist_edgey+0.5*self.fiberarea, 0)
-            else: print('Set show_fiberarea == True to see the fiber allowed area for this package.')
+            #else: print('Set show_fiberarea == True to see the fiber allowed area for this package.')
 
         return C
 

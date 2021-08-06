@@ -56,6 +56,7 @@ from .mask_layers import add_layer, get_layer, get_xsection, set_layercolor
 from . import cfg
 from . import util
 from .logging import logger
+from .polysplitter import limit_polygon_points
 
 try:
     import svgwrite
@@ -64,9 +65,9 @@ except:
     cfg.SVGWRITE = False
 
 try:
-    from plotly.offline import plot  # creates new browser tab 
+    from plotly.offline import plot  # creates new browser tab
     from plotly.offline import init_notebook_mode, iplot  # inline plots
-    init_notebook_mode(connected=True)  
+    init_notebook_mode(connected=True)
     import plotly.graph_objects as go
     cfg.PLOTLY = True
 except:
@@ -271,7 +272,7 @@ class ClsNazca:
 # =============================================================================
 # GDS
 # =============================================================================
-cfg.manual_nazca_version = None  # override auto nazca versioning if not None.
+cfg.force_nazca_version = None  # override auto nazca versioning if not None.
 
 
 class ClsGDS:
@@ -299,7 +300,7 @@ class ClsGDS:
             os.path.dirname(filebasename), ".tmp_" + os.path.basename(filebasename) + ".gds"
         )
         self.outfile = open(self.tempname, "wb")
-        self.outfile.write(gdsmod.layout_open(name=cfg.manual_nazca_version))
+        self.outfile.write(gdsmod.layout_open(name=cfg.force_nazca_version))
         self.content = defaultdict(list)  # collect cell content per (instaniated) level.
 
     def write(self, level):
@@ -606,9 +607,12 @@ class ClsMatplotlib:
             xsize = self.figsize
             ysize = 1.2 * xsize * aspect
 
-        fig, ax = mplt.subplots(
-            figsize=(xsize, ysize), facecolor=cfg.plt_background_outside
-        )
+        if cfg.plt_fig is None:
+            fig, ax = mplt.subplots(
+                figsize=(xsize, ysize), facecolor=cfg.plt_background_outside
+            )
+        else:
+            fig, ax = cfg.plt_fig
         p = PatchCollection(self.patches, match_original=True)
 
         ax.add_collection(p)
@@ -622,10 +626,10 @@ class ClsMatplotlib:
         ax.spines["right"].set_visible(False)
 
         ax.spines["left"].set_visible(True)
-        ax.spines["left"].set_smart_bounds(True)
+        #ax.spines["left"].set_smart_bounds(True)
 
         ax.spines["bottom"].set_visible(True)
-        ax.spines["bottom"].set_smart_bounds(True)
+        #ax.spines["bottom"].set_smart_bounds(True)
 
         ax.yaxis.set_ticks_position("left")
         # ax.yaxis.set_ticklabels('')
@@ -739,7 +743,7 @@ PLT = ClsMatplotlib()
 # ==============================================================================
 class ClsPlotlylib:
     """Helper class to handle Plotly export of masks.
-    
+
     Need to be run in a Jupyter notebook due to JavaScript output interface.
     """
 
@@ -801,7 +805,7 @@ class ClsPlotlylib:
         """
         if layer == cfg.default_layers["docu_pin"]:
             return None
- 
+
         layerID = get_layer(layer)
         L, D, T = cfg.layername2LDT[layerID]
         color_name = "{}/{}".format(L, D)
@@ -814,7 +818,7 @@ class ClsPlotlylib:
             logger.info(
                 "Added color to {}, {}".format(layerID, cfg.layername2LDT[layerID])
             )
-     
+
         x, y  = [list(i) for i in zip(*points)]
         try:
             width = int(self.layer2color[color_name][0]['width'])
@@ -823,20 +827,20 @@ class ClsPlotlylib:
             width = 0
         self.fig.add_trace(
             go.Scatter(
-                x=x, 
-                y=y, 
-                fill="toself", 
-                marker=dict(opacity=self.alpha), 
+                x=x,
+                y=y,
+                fill="toself",
+                marker=dict(opacity=self.alpha),
                 opacity=1 - self.alpha,
                 fillcolor=self.layer2color[color_name][0]['fill_color'],
                 line=dict(
-                    color=self.layer2color[color_name][0]['frame_color'], 
+                    color=self.layer2color[color_name][0]['frame_color'],
                     width=width,
                 )
             )
         )
 
-        
+
     def add_polyline(self, layer, points, width, bbox):
         """Add a polyline to the plot.
 
@@ -856,12 +860,12 @@ class ClsPlotlylib:
                 scaleratio=1,
             ),
             showlegend=False,
-            width=1000, 
+            width=1000,
             height=1000,
             autosize=True
         )
         iplot(self.fig)
-# end class ClsPlotlylib     
+# end class ClsPlotlylib
 PLOTLY = ClsPlotlylib()
 
 
@@ -870,22 +874,33 @@ PLOTLY = ClsPlotlylib()
 # =============================================================================
 class BBlock():
     """Helper class to export a layout as a Nazca GDS building block.
+
+    The class create a .py module with a Cell loading the GDS file and placing the pins.
+    Set bb=True in export_gds() to use it.
     """
 
-    def __init__(self, filebasename):
+    def __init__(self, filebasename, outpath="", bbpath=""):
         """Initialize BB file: open and add header.
 
         Args:
-            filebasename (str): basename of the output file (without extension).
+            filebasename (str): basename of the output file (without extension and no path).
+            outpath (str): output directory
+            bbpath (str): path to gds files on the gds py module that loads the BB.
 
         Returns:
             None
         """
-        self.filename = filebasename
+        self.filename = os.path.join(outpath, filebasename)
+        self.filebasename = filebasename
+        self.outpath = outpath
+        if bbpath == "":
+            self.bbpath = 'localdir'
+        else:
+            self.bbpath = bbpath
         self.modulename = os.path.basename(filebasename).replace(".", "_") + "_gds"
-        self.path = os.path.dirname(filebasename)
+        #self.path = os.path.dirname(filebasename)
         self.pyfilename = self.modulename + ".py"
-        self.bblockfile = open(os.path.join(self.path, self.pyfilename), "w")
+        self.bblockfile = open(os.path.join(self.outpath, self.pyfilename), "w")
         bbfile_header = """# Nazca building block(s) file.
 #
 # Note1: Do *not* edit coordinates in the cell definition(s) below.
@@ -902,12 +917,12 @@ class BBlock():
 #
 # Executing this file stand-alone exports a gds with all BBs in this file.
 
-from nazca import Cell, Pin, load_gds, export_gds
-""".format(
-            self.modulename, self.pyfilename
-        )
+from os.path import dirname
+from nazca import Cell, Pin, load_gds, export_gds, put_stub
+""".format(self.modulename, self.pyfilename)
 
         self.bblockfile.write(bbfile_header)
+        self.bblockfile.write(f"localdir = dirname(__file__)")
         self.xpos = 0
         self.foot = ""
         self.BBcells = []
@@ -922,18 +937,16 @@ from nazca import Cell, Pin, load_gds, export_gds
             None
         """
         indent = "    "
-        gdsfilename = self.filename + ".gds"
+        # gdsfilename = os.path.join(self.bbpath, f"{self.filebasename}.gds")
+        gdsfilename = f"localdir+'/{self.filebasename}.gds'"
         cellname = topcell.cell_paramsname
         cellvar = cellname.replace(".", "_")
         self.bblockfile.write(
-            "\nwith Cell(name='{0}', autobbox=False, instantiate=True) as {1}:\n".format(
-                cellname, cellvar
-            )
+            f"\nwith Cell(name='{cellname}', autobbox=False, instantiate=True) as {cellvar}:\n"
         )
+        self.bblockfile.write(f"{indent}{cellvar}.default_pins('{topcell.default_in}', '{topcell.default_out}')\n")
         self.bblockfile.write(
-            "{}load_gds(filename='{}', cellname='{}', instantiate=False).put(0)\n".format(
-                indent, gdsfilename, cellname
-            )
+            f"{indent}load_gds(filename={gdsfilename}, cellname='{cellname}', instantiate=False).put(0)\n"
         )
         self.foot += "{}{}.put('org', {:.1f})\n".format(indent, cellvar, self.xpos)
         self.BBcells.append(cellvar)
@@ -953,10 +966,9 @@ from nazca import Cell, Pin, load_gds, export_gds
             else:
                 xs = "'{}'".format(pin.xs)
             self.bblockfile.write(
-                "{}Pin(name='{}', width={}, xs={}).put({:.5f}, {:.5f}, {:.5f})\n".format(
-                    indent, name, pin.width, xs, x, y, a
-                )
+                f"{indent}Pin(name='{name}', width={pin.width}, xs={xs}).put({x:.5f}, {y:.5f}, {a:.5f})\n"
             )
+        self.bblockfile.write(f"{indent}put_stub()")
         return None
 
     def footer(self):
@@ -1126,6 +1138,7 @@ class Export_layout:
         self.path = ""
         self._filename = "nazca_export"
         self.bblock = False
+        self.bbpath = ""
         self.infolevel = 0
         self.show_cells = False
         self.clear = cfg.export_clear
@@ -1451,7 +1464,9 @@ class Export_layout:
                 continue
             L, D = cfg.layername2LDT[layermap][0:2]
             if self.gds:
-                GDS.content[level].append(gbase.gds_polygon(xy, lay=L, datatype=D))
+                pols = limit_polygon_points(xy)
+                for p in pols:
+                    GDS.content[level].append(gbase.gds_polygon(p, lay=L, datatype=D))
             if self.plt:
                 PLT.add_polygon(layermap, xy, bbox)
             if self.svg:
@@ -1496,10 +1511,16 @@ class Export_layout:
                         )
                     )
                 else:
-                    GDS.content[level].append(gbase.gds_polygon(xy, lay=L, datatype=D))
-
+                    pols = limit_polygon_points(xy)
+                    for p in pols:
+                        GDS.content[level].append(
+                            gbase.gds_polygon(p, lay=L, datatype=D)
+                        )
             if self._plt or self._svg:
-                polygon_xy = util.polyline2polygon(xy, width=pline.width, miter=pline.miter) #
+                # No need to split: use polyline2polygon (not polyline2polygons).
+                polygon_xy = util.polyline2polygon(
+                    xy, width=pline.width, miter=pline.miter
+                )
                 # TODO: polygon_xy can also be supplied by the iterator
                 if self.plt:
                     PLT.add_polygon(layermap, polygon_xy, bbox)
@@ -1510,7 +1531,6 @@ class Export_layout:
             if self.nazca:
                 self.CELL.add_polyline(layer=layermap, xy=xy, width=pline.width)
         return None
-
 
     def add_annotations(self, params):
         """Add annotation content to cell.
@@ -1598,6 +1618,7 @@ class Export_layout:
                 self.CELL.add_instance(inode, [x, y, a], flip)
         return None
 
+
     def add_gdsfiles(self, params):
         """Add gds instances to cell.
 
@@ -1645,7 +1666,7 @@ class Export_layout:
         bbstr = ""
         if self.bblock:
             bbstr = "" # "_lib"
-            bblock = BBlock(filebasename=os.path.join(self.dirname, self.filebasename + bbstr))
+            bblock = BBlock(filebasename=self.filebasename + bbstr, outpath=self.dirname, bbpath=self.bbpath)
         if self.uPDK:
             uPDK = UPDK(filebasename=os.path.join(self.dirname, self.filebasename + bbstr))
         if self.gds:
@@ -1663,7 +1684,6 @@ class Export_layout:
 
         cells_visited = set()
         for topcell in topcells:
-
             # initialize formats with a new output file per topcell
             if self.plt:  # separate plot for each topcell.
                 PLT.open(topcell, title=self.title, show_pins=self.show_pins)
@@ -1710,7 +1730,7 @@ class Export_layout:
                 PLT.close()
                 if self.info:
                     print("...plotting plt")
-                if self.output != "file":
+                if self.output != "file" and cfg.plt_fig is None:
                     mplt.show()
             if self.svg:
                 SVG.close()
@@ -1741,7 +1761,8 @@ class Export_layout:
         if self.uPDK:
             uPDK.footer()
 
-        if self.gds:  # save all external GDS file based instances
+        if self.gds:  
+            # Save external GDS file based instances
             if self.infolevel > 0:
                 print("----\nsave external gds instances")
             for newcellname, mapping in self.gds_files.items():
@@ -1756,34 +1777,33 @@ class Export_layout:
             os.replace(GDS.tempname, GDS.filename)
             print("...Wrote file '{}'".format(GDS.filename))
 
-            # whitebox files listing:
+            # Copy libraries of whitebox files and make whitebox mapping list:
             if self.submit:
                 whitelibs = {}
                 for Cname in cells_visited:
-                    C = cfg.cellnames[Cname]
+                    try:
+                        C = cfg.cellnames[Cname]
+                    except:
+                        continue  # TODO: cell visited not on cellnames. Probably an export_gds loop without clear=False
                     if hasattr(C, "whitebox"):
                         whitebox = C.whitebox
-                        pgpfile = whitebox.get("file", "")
-                        md5 = whitebox.get("md5", "")
-                        whitename = whitebox.get("cellname", "")
+                        pgpfile = whitebox.get("file", "pgp file entry not found")
+                        md5 = whitebox.get("md5", "md5sum entry not found")
+                        whitename = whitebox.get("cellname", "white cellname entry not found")
                         whitelibs[Cname] = (pgpfile, md5, whitename)
                 whitelog = GDS.filename + ".ipblocks.csv"
 
-                # Only create a whitelibs file if needed:
                 if whitelibs != {} or os.path.isfile(whitelog):
+                    # Only create a whitelibs files if needed
                     with open(whitelog, "w") as F:
                         F.write("#cellname,white_cellname,encrypted_filename,md5_gds\n")
                         for name, (pgpfile, md5, whitename) in whitelibs.items():
-                            F.write(
-                                '"{}","{}","{}",{}\n'.format(
-                                    name, whitename, os.path.basename(pgpfile), md5
-                                )
-                            )
+                            F.write(f'"{name}","{whitename}","{os.path.basename(pgpfile)}",{md5}\n')
                             if not os.path.isfile(pgpfile):
                                 logger.critical(
-                                    "missing ipblock library: {}".format(pgpfile)
+                                    f"missing ipblock library file as referenced in cell '{name}': {pgpfile}"
                                 )
-                            elif self.submit:
+                            else:
                                 self.md5 = True
                                 copy2(pgpfile, self.dirname)
                     logger.info("exported: {}".format(whitelog))
@@ -2015,6 +2035,7 @@ def export(
     output=None,
     path="",
     bb=False,
+    bbpath="",
     uPDK=False,
     cellmap=None,
     layermap=None,
@@ -2047,6 +2068,7 @@ def export(
         output (str): type of output stream (screen, file ...)
         path (str): output dir for saved Matplotlib plots (default = '')
         bb (bool): export as a library bb (default = False)
+        bbpath (str): path to use to load a gds for bb=True generated modules (default="")
         cellmap (dict):
         show_pins (bool): show pins in the output (default=True)
 
@@ -2054,9 +2076,13 @@ def export(
         None
     """
     verify_topcells(topcells)
-    # TODO: implement layermap filter.
+    if cfg.validation_layermapmode is not None:
+        layermapmode = cfg.validation_layermapmode
+    if cfg.validation_layermap is not None:
+        layermap = cfg.validation_layermap    
     export = Export_layout(layermap=layermap, layermapmode=layermapmode)
-    export.submit = submit # keep before filename!
+    
+    export.submit = submit  # keep this line before export.filename in this method!
     export.filename = filename
     export.ascii = ascii
     export.infolevel = infolevel
@@ -2101,6 +2127,7 @@ def export(
     export.output = output
     export.path = path
     export.bblock = bb
+    export.bbpath = bbpath
     export.uPDK = uPDK
     export.md5 = md5
     export.show_pins = show_pins
@@ -2120,7 +2147,8 @@ def export(
         exported = True
         if export.info:
             print("...matplotlib generation")
-        mplt.show()
+        if cfg.plt_fig is None:
+            mplt.show()
     if export.svg:
         exported = True
         if info:
@@ -2149,13 +2177,13 @@ def export_svg(topcells=None, title=None, path="", **kwargs):
     Returns:
         None"""
     export(
-        topcells, 
-        plt=False, 
+        topcells,
+        plt=False,
         plotly=False,
-        gds=False, 
-        svg=True, 
-        info=False, 
-        title=title, 
+        gds=False,
+        svg=True,
+        info=False,
+        title=title,
         **kwargs)
 
 
@@ -2247,7 +2275,8 @@ def export_gds(
     uPDK=False,
     md5=False,
     submit=False,
-    **kwargs
+    bbpath="",
+    **kwargs,
 ):
     """Export layout to gds file for all cells in <topcells>.
 
@@ -2263,6 +2292,7 @@ def export_gds(
         bb (bool): Export design as a building block (default = False)'
         submit (bool): create a complete fileset for foundry submission (default=False)
         md5 (bool): create md5sum (default=False)
+        bbpath (str): path to use to load a gds for bb=True generated modules (default="")
 
     Returns:
         None
@@ -2280,6 +2310,7 @@ def export_gds(
         uPDK=uPDK,
         md5=md5,
         submit=submit,
+        bbpath=bbpath,
         **kwargs
     )
 
@@ -2294,7 +2325,7 @@ def layout(
     """Create a layout object for rebuilding cells.'
 
     Args:
-        layermap (dict): layermap oldlayr:newlayer
+        layermap (dict): layermap oldlayer: newlayer
         layermapmode (str): 'all': copy all layers,
             'none': copy only mapped layers, remove others.
 
@@ -2305,7 +2336,8 @@ def layout(
         layermap=layermap,
         layermapmode=layermapmode,
         prefix=prefix,
-        suffix=suffix,)
+        suffix=suffix,
+    )
     ly.nazca = True
     ly.CELL = ClsNazca(infolevel=infolevel, prefix=ly.prefix, suffix=ly.suffix,)
     return ly

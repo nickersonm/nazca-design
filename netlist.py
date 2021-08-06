@@ -23,6 +23,8 @@
 Nazca classes to construct Nodes, Pointers and Cells,
 and from those the graphs/netlists of the design.
 """
+
+import os
 from itertools import count
 from collections import defaultdict, OrderedDict, namedtuple
 import copy as COPY
@@ -51,12 +53,20 @@ import nazca.util as util
 Et = count(0) # counter for default cell names:
 elmlist = []
 Pt = count(0)
-cfg.netlist_errcnt = 0 # counter for netlist errors
-cfg.interconnect_msgcnt = 0 # counter for interconnect messages
-cfg.total_errcnt = 0 # counter for all errors
-cfg.total_warncnt = 0 # counter for all warnings
-cfg.gdsload = False
 
+# message counters:
+cfg.ND_msgcnt = 0  # counter for cummulative errors
+cfg.NL_msgcnt = 0  # counter for netlist errors
+cfg.IC_msgcnt = 0  # counter for interconnect messages
+cfg.drc_msgcnt = 0  # count DRC messages.drc (None raises all)
+
+cfg.ND_raise = False
+cfg.NL_raise = False
+cfg.IC_raise = False
+
+# gds loading flags:
+cfg.gdsload = False  # flag that contains the gds file name if a file is loading. False otherwise
+cfg.gdsloadstore = ""  # store name of gds if a layer mapping conflict occurs file while loading a gds to only message a warning once.
 
 
 def to_mat(chain=0, x=0, y=0, a=0, inverse=False):
@@ -91,42 +101,6 @@ def set_db_user():
     pass
 
 
-def pin2pin_drc_on(exception=None, num=None, log=True):
-    """Switch pin2pin DRC on.
-
-    NOTE: the drc error maybe in a connection that is not exported to (gds) output
-        and, therefor, not show up in that specific layout view.
-
-    Args:
-        exception (bool): raise exception for trace back if True (default=False)
-        num (int): if provided, raise exception on drc number <num> (default=None)
-            if num is set then raise=True unless explicitly set to False
-        log (bool): print log message (default=True)
-
-    Returns:
-        None
-    """
-    cfg.drc = True
-    if num is not None:
-        cfg.drc_errcnt = num
-        cfg.drc_raise = True
-    if exception is not None:
-        cfg.drc_raise = exception
-    if log:
-        logger.info("set pin2pin drc on: {}".format(cfg.drc))
-
-pin2pin_raise = pin2pin_drc_on
-
-def pin2pin_drc_off():
-    """Switch pin2pin DRC off.
-
-    Returns:
-        None
-    """
-    cfg.drc = False
-    cfg.drc_raise = False
-
-
 def drc_instance_angle(rule, cell=None):
     """Set design rule for the angle of an instantiated cell.
     """
@@ -135,70 +109,130 @@ def drc_instance_angle(rule, cell=None):
     cfg.drc_instance_angle['angle'][cell.cell_basename] = rule
 
 
-def netlist_raise(exception=None, num=None):
-    """Switch on or off exceptions for netlist errors
+def pin2pin_drc(on=True):
+    """Switch pin2pin DRC on.
 
-    The traceback can be used to find the cause of the netlist error.
+    NOTE: the drc error maybe in a connection that is not exported to (gds) output
+        and, therefor, not show up in that specific layout view.
+
+    Args:
+        on (bool): raise exception for trace back if True (default=True)
+        num (int): if provided, raise exception on drc number <num> (default=None)
+            if num is set then raise=True unless explicitly set to False
 
     Returns:
         None
     """
-    if num is not None:
-        cfg.netlist_errnum = num
-        cfg.netlist_raise = True
-    if exception is not None:
-        cfg.netlist_raise = exception
+    if on:
+        if not cfg.drc:
+            cfg.drc = True
+            logger.info("pin2pin drc: {}".format(cfg.drc))
+    else:
+        cfg.drc = False
+        logger.info("pin2pin drc: {}".format(cfg.drc))
+
+def pin2pin_drc_on(exception=None, num=None):
+    pin2pin_drc(on=True)
+def pin2pin_drc_off():
+    pin2pin_drc(on=False)
 
 
-def netlist_exception(msg=''):
-    """Raise netlist exception if conditions apply."""
-    fullmsg = f"NL-{cfg.netlist_errcnt}/ND-{cfg.total_errcnt}: {msg}"
-    if cfg.netlist_raise:
-        if cfg.netlist_errcnt is None\
-        or cfg.netlist_errcnt == cfg.netlist_errnum:
-            raise Exception(fullmsg)
-            # TIP: use the traceback (2 steps up) to find the cause of the exception.
+def pin2pin_drc_raise(num=0):
+    if num > 0:
+        logger.info("Set to raise pin2pin drc on message: {}".format(num))
+    if not cfg.drc:
+        pin2pin_drc(on=True)
+    cfg.drc_raisenum = num
+    cfg.drc_raise = True
+raise_pin2pin_drc = pin2pin_drc_raise
 
 
-def interconnect_raise(exception=None, num=None):
+def netlist_raise(num=0, on=True):
+    """Switch on or off exceptions for netlist errors.
+
+    The traceback can be used to find the cause of the netlist error.
+
+    Args:
+        num (int): if provided, raise exception on drc number <num> (default=None)
+            if num is set then raise=True unless explicitly set to False
+        on (bool): raise exception for trace back if True (default=True)
+
+    Returns:
+        None
+    """
+    if on:
+        cfg.NL_raisenum = num
+        cfg.NL_raise = True
+    else:
+        cfg.NL_raise = False
+
+raise_netlist = netlist_raise
+
+
+def interconnect_raise(num=0, on=True):
     """Switch on or off exceptions for interconnect warnings and errors.
 
     The traceback can be used to find the cause of the netlist error.
 
+    Args:
+        num (int): if provided, raise exception on drc number <num> (default=None)
+            if num is set then raise=True unless explicitly set to False
+        on (bool): raise exception for trace back if True (default=True)
+
     Returns:
         None
     """
-    cfg.interconnect_msgnum = None
-    if num is not None:
-        cfg.interconnect_msgnum = num
-        cfg.interconnect_raise = True
-    if exception is not None:
-        cfg.interconnect_raise = exception
+    if on:
+        cfg.IC_raisenum = num
+        cfg.IC_raise = True
+    else:
+        cfg.IC_raise = False
+
+raise_interconnect = interconnect_raise
 
 
-def raise_all(exception=None, num=None):
-    """Raise an exception for any design related Nazca error."""
-    cfg.total_errnum = None
-    if num is not None:
-        cfg.total_errnum = num
-        cfg.total_raise = True
-    if exception is not None:
-        cfg.total_raise = exception
+def nazca_raise(num=0, on=True):
+    """Raise an exception for any design related Nazca error.
+
+    Args:
+        num (int): if provided, raise exception on drc number <num> (default=None)
+            if num is set then raise=True unless explicitly set to False
+        on (bool): raise exception for trace back if True (default=True)
+
+    Returns:
+        None
+    """
+    if on:
+        cfg.ND_raisenum = num
+        cfg.ND_raise = True
+    else:
+       cfg.ND_raise = False
+raise_nazca = nazca_raise
 
 
-def interconnect_logger(msg='', level='info'):
-    """Log or raise interconnect exception if conditions apply."""
-    fullmsg = f"IC-{cfg.interconnect_msgcnt}/ND-{cfg.total_errcnt}: {msg}"
-    if cfg.interconnect_raise:
-        if cfg.interconnect_msgcnt is None\
-        or cfg.interconnect_msgcnt == cfg.interconnect_msgnum:
-            raise Exception(fullmsg)
-            # TIP: use the traceback (2 steps up) to find the cause of the exception.
-    elif cfg.total_raise:
+# =============================================================================
+# message loggers to be used in combination with raising Exceptions.
+# =============================================================================
+def netlist_logger(msg='', level='info'):
+    """Raise netlist exception if conditions apply.
+
+    Args:
+        msg (str): log message
+        level (str): log level: 'debug', 'info' (default), 'error', or 'exception'.
+
+    Returns:
+        None
+    """
+    fullmsg = f"NL-{cfg.NL_msgcnt}/ND-{cfg.ND_msgcnt}: {msg}"
+    if cfg.NL_raise and cfg.NL_msgcnt == cfg.NL_raisenum:
+        raise Exception(fullmsg)
+        # TIP: use the traceback (2 steps up) to find the cause of the exception.
+
+    elif cfg.ND_raise:
         main_logger(msg=msg, level=level)
 
-    cfg.interconnect_msgcnt += 1
-    cfg.total_errcnt += 1
+    cfg.NL_msgcnt += 1
+    cfg.ND_msgcnt += 1
 
     if level == 'warning':
         logger.warning(fullmsg)
@@ -208,26 +242,66 @@ def interconnect_logger(msg='', level='info'):
        logger.info(fullmsg)
     else:
         raise Exception(f"Unknown interconnect_logger level given: '{level}'")
+        # TIP: use the traceback (2 steps up) to find the cause of the exception.
+
+
+def interconnect_logger(msg='', level='info'):
+    """Log or raise an interconnect exception if conditions apply.
+
+    Args:
+        msg (str): log message
+        level (str): log level: 'debug', 'info' (default), 'error', or 'exception'.
+
+    Raises:
+        Exception if the "exception number" is set and matching this log entry.
+        Exception if unknown level is provided
+
+    Returns:
+        None
+    """
+    cfg.IC_msgcnt += 1
+    cfg.ND_msgcnt += 1
+    fullmsg = f"IC-{cfg.IC_msgcnt}/ND-{cfg.ND_msgcnt}: {msg}"
+    if level == 'warning':
+        logger.warning(fullmsg)
+    elif level == 'error':
+       logger.error(fullmsg)
+    elif level == 'info':
+       logger.info(fullmsg)
+    else:
+        raise Exception(f"Unknown interconnect_logger level given: '{level}'")
+            # TIP: use the traceback (2 steps up) to find the cause of the exception.
+    if cfg.IC_raise:
+        if cfg.IC_msgcnt == cfg.IC_raisenum:
+            raise Exception(fullmsg)
+            # TIP: use the traceback (2 steps up) to find the cause of the exception.
+    elif cfg.ND_raise:
+        main_logger(msg=msg, level=level, _redirect=True)
 
 
 # TODO: check out logging.LoggerAdapter and logging.Filter
-def main_logger(msg, level='info'):
+def main_logger(msg, level='info', _redirect=False):
     """Log or raise an exception if conditions apply.
 
     This message handler will take care of loggin any error or warning.
     It will raise an exception if the error counter = errnum
     (if errnum has been set) for debugging/trace back purposes.
 
+    Arg:
+        msg (str): log message
+        level (str): log level: 'debug', 'info' (default), 'error', or 'exception'.
+        _redirect (bool): internal variable for counting messages.
+
     Returns:
         None
     """
-    cfg.total_errcnt += 1
-    fullmsg = f"ND-{cfg.total_errcnt}: {msg}"
-    if cfg.total_raise:
-        if cfg.total_errcnt is None\
-        or cfg.total_errcnt == cfg.total_errnum:
-            raise Exception(fullmsg)
-            # TIP: use the traceback (2 steps up) to find the cause of the exception.
+    if not _redirect:
+        cfg.ND_msgcnt += 1
+
+    fullmsg = f"ND-{cfg.ND_msgcnt}: {msg}"
+    if cfg.ND_raise and cfg.ND_msgcnt == cfg.ND_raisenum:
+        raise Exception(fullmsg)
+        # TIP: use the traceback (2 steps up) to find the cause of the exception.
 
     if level == 'warning':
         logger.warning(fullmsg)
@@ -237,10 +311,13 @@ def main_logger(msg, level='info'):
        logger.info(fullmsg)
     else:
         raise Exception(f"Unknown interconnect_logger level given: '{level}'")
+        # TIP: use the traceback (2 steps up) to find the cause of the exception.
 
 
 def varinfo(min, default, max, type, unit, doc):
     """Set parameter value info.
+
+    Experimental function.
 
     Returns:
         dict: var info
@@ -257,6 +334,9 @@ def varinfo(min, default, max, type, unit, doc):
 
 class Pointer():
     """A pointer with state information.
+
+    Note: For normal Nazca usage avoid using this class directly and use the methods
+    provided in the Node class instead.
 
     The pointer has the positional information of a node.
     The positional information is kept in a matrix that holds the homogeneous
@@ -304,8 +384,6 @@ class Pointer():
             ])
         self.flipstate = False
 
-#        self.goto(ptr.get_xya())
-
 
     def move(self, x=0, y=0, a=0.0):  # Relative
         """Move pointer relative to current location.
@@ -338,9 +416,11 @@ class Pointer():
         a = pi*a/180
         x = self.x
         y = self.y
-        self.mat = np.array([[cos(a), sin(a), 0.0],
-                             [-sin(a), cos(a), 0.0],
-                             [x, y, 1.0]])
+        self.mat = np.array([
+            [cos(a), sin(a), 0.0],
+            [-sin(a), cos(a), 0.0],
+            [x, y, 1.0]
+        ])
         # self.mat = dot(mat, self.mat)
         return self
 
@@ -356,9 +436,11 @@ class Pointer():
         """
         x, y, a = ptr.get_xya()
         a = pi*a/180
-        mat = np.array([[cos(a), sin(a), 0.0],
-                        [-sin(a), cos(a), 0.0],
-                        [x, y, 1.0]])
+        mat = np.array([
+            [cos(a), sin(a), 0.0],
+            [-sin(a), cos(a), 0.0],
+            [x, y, 1.0]
+        ])
         self.mat = dot(mat, self.mat)
         return self
 
@@ -561,10 +643,11 @@ class smatrix:
 class Node():
     """Node class for creating node objects.
 
+    Note that pins in the Nazca design terminology are actually Node objects.
+
     The netlist of Nodes and connections between the nodes (edges) construct
     the photonic circuit and/or layout.
     """
-    #ID = 0
 
     def __init__(self, name=None):
         """Contruct a Node.
@@ -577,21 +660,22 @@ class Node():
         """
         #print('______________________new node', name)
         self.id = next(Pt)
-        self.nb_geo = [] #nearest neighbors geometry
-        self.nb_opt = [] #nearest neighbors, optical connection (in Smatrix)
-        self.nb_ele = [] #nearest neighbors, electronic connection
-        self.nb_cnode = [] #cell tree, only for used for cnodes
-        self.cnode = None # cnode of the node. A cnode is its own cnode
+        self.nb_geo = []  #nearest neighbors geometry
+        self.nb_opt = []  #nearest neighbors, optical connection (in Smatrix)
+        self.nb_ele = []  #nearest neighbors, electronic connection
+        self.nb_cnode = []  #cell tree, only for used for cnodes
+        self.cnode = None  # cnode of the node. A cnode is its own cnode
         self.parent_cnode = None
-        self.cell = None # TODO: in use? Cell object of the cnode
-        self.pointer = None # Pointer of the Node. Contains the node position after solving.
-        self.xs = None # String name reference to the xs of the node.
-        self.width = None # width of the node
-        self.instance = False # store if node is in a cell (False) or instance (True)
-        self.type = None
-        self.show = False # show pin in layout.
-        self.remark = None
-        self.io = None # indicate of a port is an explicitly in or out in case of directional ports
+        self.cell = None  # TODO: in use? Cell object of the cnode
+        self.pointer = None  # Pointer of the Node. Contains the node position after solving.
+        self.xs = None  # String name reference to the xs of the node.
+        self.width = None  # width of the node
+        self.radius = None  # radius of the curvature at the pin.
+        self.instance = False  # store if node is in a cell (False) or instance (True)
+        self.show = False  # show pin in layout.
+        self.remark = None  # add info to the pin.
+        self.io = None   # indicate of a port is an explicitly in or out in case of directional ports
+        self.type = None  #
 
         if name is None:
             self.name = str(self.id)
@@ -609,8 +693,11 @@ class Node():
             format(self.id, self.name, cell, self.xs, self.width, coor, self.type, self.io, self.remark)
 
 
-    def copy(self):
-        """Copy a Node object.
+    def copy(self, inplace=False):
+        """Copy a Node object into the active cell or inplace.
+
+        Args:
+            inplace (bool): Copy the node into the same cell if False (True) or the active cell (default).
 
         Returns:
             Node: copy of the node with the same attributes as the original
@@ -632,7 +719,10 @@ class Node():
         node.io = self.io
         node.remark = self.remark
 
-        cnode = cfg.cells[-1].cnode
+        if inplace:
+            cnode = self.cnode
+        else:
+            cnode = cfg.cells[-1].cnode
         if self.cnode is not cnode and self.cnode.parent_cnode is not cnode:
             raise Exception('It is not allowed to create a node outside the scope of max one level deep:'\
                 ' You cannot connect to a cell that is not placed inside the cell you are creating.')
@@ -664,7 +754,7 @@ class Node():
         node.xs = self.xs
         node.width = self.width
         node.type = self.type
-
+        
         #node.pointer.chain = 0
         node.cnode = cfg.cells[-1].cnode
         node.parent_cnode = cfg.cells[-1].parent_cnode
@@ -730,10 +820,21 @@ class Node():
         """
         return self.pointer.a
 
+    def angle(self, angle):
+        """Get pointer a-position of the Node.
+
+        Returns:
+            tuple: pointer a-position with respect to the cell origin
+        """
+        self.pointer.set_a(angle)
+        return self
+
+
+
 #==============================================================================
 #     Create pointer operations on Node level for syntax convenience
 #==============================================================================
-    def move(self, x=0, y=0, a=0, xs=0, width=0, drc=True):
+    def move(self, x=0, y=0, a=0, xs=0, width=0, radius=0, drc=True):
         """Create a new Node translated by (<x>, <y>, <a>) with respect to self.
 
         Also 'width' and 'xs' attributes of the can be 'moved'. This is for
@@ -747,6 +848,7 @@ class Node():
             a (float): angle of rotation in degree
             xs (str): move to xs
             width (float): move to width
+            radius (float): move to radius
             drc (bool): switch off drc if False (default=True)
 
         Returns:
@@ -766,11 +868,14 @@ class Node():
         if width != 0:
             drc = False
             node.width = width
+        if radius != 0:
+            drc = False
+            node.radius = radius
         connect_geo(self, node, (x, y, a), 0, 0, drc=drc)
         return node
 
 
-    def rotate(self, a=0, xs=0, width=0, drc=True):
+    def rotate(self, a=0, xs=0, width=0, radius=0, drc=True):
         """Create a new Node rotate pointer by <a>.
 
         Also 'width' and 'xs' attributes of the can be 'moved'. This is for
@@ -782,6 +887,7 @@ class Node():
             a (float): angle of rotation in degree
             xs (str): move to xs
             width (float): move to width
+            radius (float): move to radius
             drc (bool): switch off drc if False (default=True)
 
         Returns:
@@ -797,12 +903,15 @@ class Node():
         if width != 0:
             drc = False
             node.width = width
+        if radius != 0:
+            drc = False
+            node.radius = radius
         connect_geo(self, node, (0, 0, a), 0, 0, drc=drc)
         return node
     rot = rotate
 
 
-    def rot2ref(self, angle=0.0, ref=None, xs=0, width=0, drc=True):
+    def rot2ref(self, angle=0.0, ref=None, xs=0, width=0, radius=0, drc=True):
         """Create a new Node rotate pointer by <a> with respect to node ref.
 
         Also 'width' and 'xs' attributes of the can be 'moved'. This is for
@@ -815,6 +924,7 @@ class Node():
             ref (Node): if None, org of current cell is assumed
             xs (str): move to xs
             width (float): move to width
+            radius (float): move to radius
             drc (bool): switch off drc if False (default=True)
 
         Returns:
@@ -833,13 +943,14 @@ class Node():
         if width != 0:
             drc = False
             node.width = width
+        if radius != 0:
+            drc = False
+            node.radius = radius
         connect_geo(self, node, (0, 0, -a), 0, 0, drc=drc)
         return node
 
 
-
-
-    def skip(self, x=0, xs=0, width=0, drc=True):
+    def skip(self, x=0, xs=0, width=0, radius=0, drc=True):
         """Create a new Node skipping <x> in direction of the pointer.
 
         Also 'width' and 'xs' attributes of the can be 'moved'. This is for
@@ -851,6 +962,7 @@ class Node():
             x (float): move in x-direction
             xs (str): move to xs
             width (float): move to width
+            radius (float): move to radius
             drc (bool): switch off drc if False (default=True)
 
         Returns:
@@ -870,11 +982,14 @@ class Node():
         if width != 0:
             drc = False
             node.width = width
+        if radius != 0:
+            drc = False
+            node.radius = radius
         connect_geo(self, node, (x, 0, 0), 0, 0, drc=drc)
         return node
 
 
-    def shift(self, x=0, y=0, xs=0, width=0, drc=True):
+    def shift(self, x=0, y=0, xs=0, width=0, radius=0, drc=True):
         """Create a new Node shifting pointer (<x>, <y>), keeping orientation.
 
         Also 'width' and 'xs' attributes of the can be 'moved'. This is for
@@ -887,6 +1002,7 @@ class Node():
             y (float): move in y-direction
             xs (str): move to xs
             width (float): move to width
+            radius (float): move to radius
             drc (bool): switch off drc if False (default=True)
 
         Returns:
@@ -906,11 +1022,14 @@ class Node():
         if width != 0:
             drc = False
             node.width = width
+        if radius != 0:
+            drc = False
+            node.radius = radius
         connect_geo(self, node, (x, 0, 0), 0, 0, drc=drc)
         return node
 
 
-    def offset(self, y=0, xs=0, width=0, drc=True):
+    def offset(self, y=0, xs=0, width=0, radius=0, drc=True):
         """Create a new Node that is offset by <y>.
 
         Also 'width' and 'xs' attributes of the can be 'moved'. This is for
@@ -922,6 +1041,7 @@ class Node():
             y (float): move in y-direction
             xs (str): move to xs
             width (float): move to width
+            radius (float): move to radius
             drc (bool): switch off drc if False (default=True)
 
         Returns:
@@ -941,6 +1061,9 @@ class Node():
         if width != 0:
             drc = False
             node.width = width
+        if radius != 0:
+            drc = False
+            node.radius = radius
         connect_geo(self, node, (0, y, 0), 0, 0, drc=drc)
         return node
     os = offset
@@ -992,7 +1115,7 @@ class Node():
         """
         for nn in self.nb_opt:
             if nn[3].split('_')[0] == sigtype:
-                yield nn[0], nn[1], nn[2], nn[3].split('_')[-1], nn[4]                
+                yield nn[0], nn[1], nn[2], nn[3].split('_')[-1], nn[4]
 
 
     def geo_nb_iter(self):
@@ -1066,7 +1189,7 @@ class Node():
 #==============================================================================
 # Functions to defining an edge (geometrical, optical, electrical) between nodes.
 #==============================================================================
-drc_cnt = 0
+
 def pin_drc(pin1, pin2, t):
     """Perform DRC on pin-pin connections.
 
@@ -1081,7 +1204,7 @@ def pin_drc(pin1, pin2, t):
     Returns:
         None
     """
-    global drc_cnt
+    global drc_msgcnt
     if not (pin1.xs is not None and pin2.xs is not None):
         return None
     # else continue if both pins have a xs ->
@@ -1150,55 +1273,72 @@ def pin_drc(pin1, pin2, t):
             pin2name = "{}.pin['{}']".format(pin2.cnode.cell.cell_name, pin2.up.name)
 
         if DRCxsection:
-            drc_cnt += 1
-            msg = "DRC-{}: xsection mismatch in cell '{}': {} != {} : {} - {} @ {}".\
-                format(drc_cnt, cfg.cells[-1].cell_name, pin1.xs, pin2.xs,
+            cfg.drc_msgcnt += 1
+            cfg.ND_msgcnt += 1
+            msg = "DRC-{}/ND-{}: xsection mismatch in cell '{}': {} != {} : {} - {} @ {}".\
+                format(cfg.drc_msgcnt, cfg.ND_msgcnt, cfg.cells[-1].cell_name, pin1.xs, pin2.xs,
                     pin1name, pin2name, pin1.fxy())
             Polygon(points=ring(*cfg.drc_ring_xs), layer=cfg.drc_layer_xs).put(pin1)
-            font.text('x'+str(drc_cnt), layer=cfg.drc_layer_xs, height=5, align='cc').put(pin1)
-            if cfg.drc_raise and (cfg.drc_errcnt is None or drc_cnt == cfg.drc_errcnt):
+            font.text('x'+str(cfg.drc_msgcnt), layer=cfg.drc_layer_xs, height=5, align='cc').put(pin1)
+            if (
+                (cfg.drc_raise and (cfg.drc_msgcnt == cfg.drc_raisenum)) or
+                (cfg.ND_raise and (cfg.ND_msgcnt == cfg.ND_raisenum))
+            ):
                 logger.error(msg, exc_info=True)
                 raise Exception(msg)
             else:
                 logger.error(msg)
 
         if DRCsymmetry:
-            drc_cnt += 1
-            msg = "DRC-{}: symmetry mismatch in cell '{}' for xs = {} on pins {} to {} @ {}".\
-                format(drc_cnt, cfg.cells[-1].cell_name, pin1.xs,
+            cfg.drc_msgcnt += 1
+            cfg.ND_msgcnt += 1
+            msg = "DRC-{}/ND-{}: symmetry mismatch in cell '{}' for xs = {} on pins {} to {} @ {}".\
+                format(cfg.drc_msgcnt, cfg.ND_msgcnt, cfg.cells[-1].cell_name, pin1.xs,
                     pin1name, pin2name, pin1.fxy())
             Polygon(points=ring(*cfg.drc_ring_sym), layer=cfg.drc_layer_sym).put(pin1)
-            font.text('s'+str(drc_cnt), layer=cfg.drc_layer_sym, height=5, align='cc').put(pin1)
-            if cfg.drc_raise and (cfg.drc_errcnt is None or drc_cnt == cfg.drc_errcnt):
+            font.text('s'+str(cfg.drc_msgcnt), layer=cfg.drc_layer_sym, height=5, align='cc').put(pin1)
+            if (
+                (cfg.drc_raise and (cfg.drc_msgcnt == cfg.drc_raisenum)) or
+                (cfg.ND_raise and (cfg.ND_msgcnt == cfg.ND_raisenum))
+            ):
                 logger.error(msg, exc_info=True)
                 raise Exception(msg)
             else:
                 logger.error(msg)
 
         if DRCangle:
-            drc_cnt += 1
-            msg = "DRC-{}: angle mismatch in cell '{}': {:.3f} != 0 deg between xsections {} and {} @ {}".\
-                format(drc_cnt, cfg.cells[-1].cell_name, t[2], pin1name, pin1name, pin1.fxy())
+            cfg.drc_msgcnt += 1
+            cfg.ND_msgcnt += 1
+            msg = "DRC-{}/ND-{}: angle mismatch in cell '{}': {:.3f} != 0 deg between pins {} and {} @ {}".\
+                format(cfg.drc_msgcnt, cfg.ND_msgcnt, cfg.cells[-1].cell_name, t[2], pin1name, pin1name, pin1.fxy())
             Polygon(points=ring(*cfg.drc_ring_angle), layer=cfg.drc_layer_angle).put(pin1)
-            font.text('a'+str(drc_cnt), layer=cfg.drc_layer_angle, height=5, align='cc').put(pin1)
-            if cfg.drc_raise and (cfg.drc_errcnt is None or drc_cnt == cfg.drc_errcnt):
+            font.text('a'+str(cfg.drc_msgcnt), layer=cfg.drc_layer_angle, height=5, align='cc').put(pin1)
+            if (
+                (cfg.drc_raise and (cfg.drc_msgcnt == cfg.drc_raisenum)) or
+                (cfg.ND_raise and (cfg.ND_msgcnt == cfg.ND_raisenum))
+            ):
                 logger.error(msg, exc_info=True)
                 raise Exception(msg)
             else:
                 logger.error(msg)
 
         if DRCwidth and not DRCxsection:
-            drc_cnt += 1
-            msg = "DRC-{}: width mismatch in cell '{}': {} != {} : {} - {} @ {}".\
-                format(drc_cnt, cfg.cells[-1].cell_name, pin1.width, pin2.width,
+            cfg.drc_msgcnt += 1
+            cfg.ND_msgcnt += 1
+            msg = "DRC-{}/ND-{}: width mismatch in cell '{}': {} != {} : {} - {} @ {}".\
+                format(cfg.drc_msgcnt, cfg.ND_msgcnt, cfg.cells[-1].cell_name, pin1.width, pin2.width,
                     pin1name, pin2name, pin1.fxy())
             Polygon(points=ring(*cfg.drc_ring_width), layer=cfg.drc_layer_width).put(pin1)
-            font.text('w'+str(drc_cnt), layer=cfg.drc_layer_width, height=5, align='cc').put(pin1)
-            if cfg.drc_raise and (cfg.drc_cnt is None or drc_cnt == cfg.drc_cnt):
+            font.text('w'+str(cfg.drc_msgcnt), layer=cfg.drc_layer_width, height=5, align='cc').put(pin1)
+            if (
+                (cfg.drc_raise and (cfg.drc_msgcnt == cfg.drc_raisenum)) or
+                (cfg.ND_raise and (cfg.ND_msgcnt == cfg.ND_raisenum))
+            ):
                 logger.error(msg, exc_info=True)
                 raise Exception(msg)
             else:
                 logger.error(msg)
+
         cfg.cp = cp
 
 
@@ -1738,8 +1878,11 @@ class Cell():
             name2 = '{}_{}'.format(name, num)
             cfg.cellnames[name2] = self
             if instantiate is True:
+                gdsmsg = ""
+                if cfg.gdsload != "" and cfg.gdsload is not False:
+                    gdsmsg = f" Occured during gds load of '{cfg.gdsload}'. Use load_gds(cellsreused=['{name}']) to reuse existing cells instead."
                 main_logger(
-                    f"Duplicate cell name in nd.Cell(name='{name}') renamed to '{name2}'.",
+                    f"Duplicate cell name in nd.Cell(name='{name}') renamed to '{name2}'." + gdsmsg,
                     "warning"
                 )
             name = name2
@@ -1774,6 +1917,7 @@ class Cell():
         self.cell_name = name             # name: base + params + hash
         self.instantiate = instantiate
         self.group = ''  # (str) optional value for grouping/sorting cells
+        self.name_layer = None  # (str) custom layer for displaying BB name polygon. None defaults to 'bbox_name'.
         self.module = '' # optional str value to store the module name the cells is defined in.
         self.ranges = {} #  for storing parameter information like the allowed range
         self.bbox = None
@@ -2063,7 +2207,7 @@ class Cell():
         if C1 is None or (isinstance(C1, tuple) and len(C1) == 0):
             return cfg.cp, (0, 0, 0)
         elif isinstance(C1, Node):
-            if C1.cnode.instance is None and C1.cnode.cell.closed:
+            if C1.cnode.instance is None and C1.cnode.cell.closed and not cfg.patchcell:
                 raise Exception("It is not allowed to connect to a closed cell:"
                     " from cell '{2}'"
                     " to pin '{1}' of the already *closed* cell '{0}'."
@@ -2073,7 +2217,7 @@ class Cell():
                     format(C1.cnode.cell.cell_name, C1.name, self.cell_name))
             return C1, (0, 0, 0)
         elif isinstance(C1, Instance):
-            if C1.cnode.instance is None and C1.cnode.cell.closed:
+            if C1.cnode.instance is None and C1.cnode.cell.closed and not cfg.patchcell:
                 raise Exception("It is not allowed to connect from cell '{2}'"
                     " to pin '{1}' of the already *closed* cell '{0}'."
                     " Solution: instantiate cell '{0}' first inside cell '{2}'"
@@ -2319,7 +2463,7 @@ f"Array will be ignored.\n{excp}",
                 # TODO: do all properties have to be copied?
                 #       maybe better to get them from the cell?
                 node = Node()
-                node.up = pin # link to original node in cell
+                node.up = pin  # link to original node in cell
                 node.xs = pin.xs
                 node.io = pin.io
                 node.width = pin.width
@@ -2343,6 +2487,7 @@ f"Array will be ignored.\n{excp}",
         instance.pinin = instance.pin[self.default_in]
         instance.pinout = instance.pin[self.default_out]
         return instance
+
 
     # TODO: add instantiate to put to flatten at put-time
     def put(self, *args, flip=False, flop=False, array=None, scale=1.0,
@@ -2477,13 +2622,12 @@ f"Array will be ignored.\n{excp}",
         if self.pin2 is not None and not cfg.group_connect:
             if flip:
                 msg = f"Can not close the p2p connection with flip is True in cell '{self.cell_name}'."
-                netlist_exception(msg)
+                netlist_logger(msg, "error")
             elif C[0] is not None:
                 msg = f"Can not close the p2p connection with non-empty put() call on cell '{self.cell_name}'."
-                netlist_exception(msg)
+                netlist_logger(msg, "error")
             else:
                 connect_geo(instance.pinout, self.pin2, diff(instance.pinout, self.pin2), solve=False, drc=drc)
-
 
         # add the new instance bbox information to the parent
         parent = parent_cnode.cell
@@ -2550,16 +2694,18 @@ f"Array will be ignored.\n{excp}",
                     #print("  oldI:", old.keys())
 
                     for oname, opin in opindict.items():
-                        for nname, npin in newipins.items():
-                            if nodeI.up.name == nname and nodeC.instance is not None:
-                                continue
-                            if nname != 'org' and oname != 'org':
-                                x, y, a = diff(opin, npin)
-                                d = hypot(x, y)
-                                if d < 0.001:
-                                    #print(f"{nodeI.up.name} {nodeC.instance} {oname} - {nname}: {d:0.1f}")
-                                    # may include a new put statement
-                                    connect_geo(opin, npin, (x, y, a), solve=False, drc=drc)
+                        if opin.xs is not None:  # do not scan further for pins with xs = None
+                            for nname, npin in newipins.items():
+                                if npin.xs is not None:  # do not scan further for pins with xs = None
+                                    if nodeI.up.name == nname and nodeC.instance is not None:
+                                        continue
+                                    if nname != 'org' and oname != 'org':
+                                        x, y, a = diff(opin, npin)
+                                        d = hypot(x, y)
+                                        if d <= cfg.autoconnectdistance:
+                                            #print(f"{nodeI.up.name} {nodeC.instance} {oname} - {nname}: {d:0.1f}")
+                                            # may include a new put statement
+                                            connect_geo(opin, npin, (x, y, a), solve=False, drc=drc)
                 pass
         parent.ibbox[newi] = ibboxloc
 
@@ -2903,7 +3049,9 @@ f"Array will be ignored.\n{excp}",
                     length=length,
                     width=width,
                     move=(self.bbox[0], self.bbox[1]+0.5*width, 0),
-                    params=True)
+                    params=True,
+                    name_layer=self.name_layer,
+                )
                 self.length = length
                 self.width = width
         if not cfg.solve_direct:
@@ -2930,7 +3078,7 @@ f"Array will be ignored.\n{excp}",
                 format(name, xs=xs, w=w, c=node.xya())
         Annotation(text=pintxt, layer=cfg.default_layers['pin_text']).put(0)
 
-
+    
     def close(self):
         """Close the cell.
 
@@ -3141,8 +3289,21 @@ def get_transformation(start=None, end=None):
 #==============================================================================
 class Pin():
     """Pin class"""
-    def __init__(self, name=None, xs=None, layer=None, width=None, type=None, pin=None,
-            io=None, flip=False, show=None, remark=None, chain=None):
+    def __init__(
+        self,
+        name=None,
+        xs=None,
+        layer=None,
+        width=None,
+        radius=None,
+        type=None,
+        pin=None,
+        io=None,
+        flip=False,
+        show=None,
+        remark=None,
+        chain=None
+    ):
         """Construct a Pin object.
 
         A Pin object (capital P to denote the class object) holds information
@@ -3166,6 +3327,7 @@ class Pin():
                 This will add an xs pinstyle. If no xs is provided it will use
                 the default xs. Note that layer is not a pin property.
             width (float): width in um of the connection the pin represents
+            radius (float): radius of curvature at the pin in um.
             type (str): extra property for the pin
             pin (Node):
             chain (int):indicate if pin is a chain or connector (1) or not (0)
@@ -3198,15 +3360,17 @@ class Pin():
         # set defaults:
         self.xs = None
         self.width = None
+        self.radius = 0
         self.name = 'noname'
         self.type = None
         self.chain = 1
         self.show = False
         self.remark = remark
         self.io = 0
-
         self.pin = pin
-        if pin is not None: # copy pin properties if a pin is provided:
+
+        # copy pin properties if a pin is provided:
+        if pin is not None:
             if pin.cnode.instance is False:  # check if not by mistake referencing to a cell
                 if pin.cnode is not cfg.cells[-1].cnode:  # allow a copy from pin in same call
                     interconnect_logger(
@@ -3216,6 +3380,7 @@ class Pin():
             self.name = pin.name
             self.xs = pin.xs
             self.width = pin.width
+            self.radius = pin.radius
             self.io = pin.io
             self.type = pin.type
             self.chain = pin.chain
@@ -3223,6 +3388,7 @@ class Pin():
 
         if name is not None:
             self.name = name
+
         # override pin properties if set explicitly:
         if xs is not None:
             # TODO: Make it possible to overrule the pin with a None value (for DRC)?
@@ -3251,6 +3417,8 @@ class Pin():
             self.width = width
         if type is not None:
             self.type = type
+        if radius is not None:
+            self.radius = radius
         if chain is not None:
             self.chain = chain
         if show is not None:
@@ -3286,7 +3454,7 @@ class Polygon():
 
         Args:
             pinname (str): name of the pin (obsolete)
-            layer (int): layer number to put the Polygon in
+            layer (int | (int, int) | str): layer number, (layer, datatype) tuple or layer name to put the Polygon in.
             points (list): list of points [(x1, y1), (x2, y2), ...]
 
         Returns:
@@ -3379,11 +3547,11 @@ class Polyline():
 
         Args:
             pinname (str): name of the pin (obsolete)
-            layer (int): layer number to put the Polyline in
+            layer (int | (int, int) | str): layer number, (layer, datatype) tuple or layer name to put the Polygon in.
             width (float): width of the polyline
             pathtype (int): gds type of path: 0 (flush), 1 (round), 2, 3
             points (list): list of points [(x1, y1), (x2, y2), ...]
-            miter (float): lemgth at joint of two straight sections (default=0.5)
+            miter (float): length at joint of two straight sections (default=0.5)
 
         Returns:
             None
@@ -3400,7 +3568,8 @@ class Polyline():
         self.pathtype = pathtype
         self.points = points
         self.miter = miter
-        self.polygon = util.polyline2polygon(self.points, width=self.width, miter=self.miter)
+        self.polygon = util.polyline2polygon(self.points, width=self.width,
+                miter=self.miter)
         hull = False
         if cfg.use_hull:
             try:
@@ -3488,8 +3657,8 @@ class Annotation():
         """Construct an annotation object.
 
         Args:
-            layer (int): layer number to put the annotation in
-            text (str): annotation text (defualt = '')
+            layer (int | (int, int) | str): layer number, (layer, datatype) tuple or layer name to put the Polygon in.
+            text (str): annotation text (default = '')
 
         Returns:
             None
@@ -3558,22 +3727,24 @@ def _string_to_pins(string):
 
 
 def _gds2native(
-        strm,
-        topcellname=None,
-        cellmap=None,
-        bbox=False,
-        bboxbuf=0,
-        hull=None,
-        show_hull=False,
-        hull_based_bbox=None,
-        scale=1.0,
-        flat=False,
-        instantiate=True,
-        asdict=False,
-        topcellsonly=True,
-        select='',
-        reuse=False,
-        cellsnotreused=None):
+    strm,
+    topcellname=None,
+    cellmap=None,
+    bbox=False,
+    bboxbuf=0,
+    hull=None,
+    show_hull=False,
+    hull_based_bbox=None,
+    scale=None,
+    flat=False,
+    instantiate=True,
+    asdict=False,
+    topcellsonly=True,
+    select='',
+    reuse=False,
+    cellsnotreused=None,
+    cellsreused=None,
+):
     """Translate a GDS stream into native native Nazca cell structure.
 
     If no cellname is provided it will select the topcell if there is only
@@ -3593,50 +3764,52 @@ def _gds2native(
             only the first cell occurance. Setting reuse=True is dangerous.
         cellsnotreused (list of str): list of cellnames to ignore for
             reuse if reuse=True
+        cellsreused (list of str): list of cellnames to reuse. If set all other cells will
+            not be reused and reuse and cellsnotreused will be ignored.
 
     Returns:
         list of str: list of cellnames in <filename> under cell name <cellname>
     """
     annotated_cells = []
-    um0 = 1000
-    um = um0/scale # scale factor between gds integers and micro-meters.
+    um0 = 1e-6 / gb.gds_db_unit
+    um = um0 / scale # scale factor between gds integers and micro-meters.
     gds_elements_unknown = set()
 
     NC = {}
     rename_map = {}
-    if not reuse:
-        cells_visited = set()
+
+    if cellsnotreused is None:
+        cellsnotreused = []
+    if cellsreused is None:
+        cellsreused = []
+    if cellsreused:
+        reuse = True
+    if reuse:
+        if cellsreused:
+           cells_forreuse = set(cellsreused) - set(cellsnotreused)  # only reuse explicit cells from the list for reuse and cells in this load call
+        else:
+           cells_forreuse = set(cfg.cellnames.keys()) - set(cellsnotreused)   # reuse all cells in memory
     else:
-        cells_visited = set(cfg.cellnames.keys())
+        cells_forreuse = []
+
+    cells_visited = set()
 
     if asdict:
         topcells = strm.topcell()
     else:
         topcells = [topcellname]
 
-    if cellsnotreused is None:
-        cellsnotreused = []
-#    else: # anything under cell to ignore could be different too. Do not use its instances
-#        notused = cellsnotreused.copy()
-#        ignore = set()
-#        for ignorecell in notused:
-#            ignore |= strm.cell_branch(ignorecell)
-#        cellsnotreused = list(notused)
-
     for topcellname in topcells:
         branch_iter = _scan_branch(strm, topcellname)
+        C = None  # stays None if only resued cells are encountered.
         for cellname in branch_iter: # bottom up
-
-            # locally visited (in this load)
-            if (cellname in cells_visited) \
-            and not reuse:
+            if cellname in cells_visited:
                 continue
-
-            # globally visited
-            if (cellname in cells_visited) \
-            and reuse \
-            and (cellname not in cellsnotreused):
-                continue
+            if reuse:
+                if cellname in set(cfg.cellnames):
+                    if cellname in cells_forreuse:  # cells visited during program execution
+                        main_logger(f"reusing cell '{cellname}' when loading file '{cfg.gdsload}'", "info")
+                        continue
 
             cells_visited.add(cellname)
             cellrecord = strm.cells[cellname]
@@ -3648,6 +3821,7 @@ def _gds2native(
                     _instantiate = False
                 else:
                     _instantiate = True
+            #print(cellname)
             with Cell(
                     cellname,
                     instantiate=_instantiate,
@@ -3751,7 +3925,7 @@ def _gds2native(
                         C.hull_based_bbox = True
 
             rename_map[cellname] = C.cell_name
-            NC[C.cell_name] = C # 'cellname' after cell generation
+            NC[C.cell_name] = C  # 'cellname' after cell generation
 
     if gds_elements_unknown and cfg.show_unknown_GDS_records:
         elist= ["{}({})".format(gb.GDS_record.name[e], e) for e in gds_elements_unknown]
@@ -3761,6 +3935,9 @@ def _gds2native(
             "warning"
         )
     cfg.annotated_cells = annotated_cells
+    if C is None:
+        #print(f"Only reused cells found when loading {topcells}")
+        C = cfg.cellnames[topcellname]
     if not asdict:
         return C
     else:
@@ -3796,28 +3973,30 @@ def print_structure(filename, cellname, level=0):
 
 
 def load_gds(
-        filename,
-        cellname=None,
-        newcellname=None,
-        asdict=False,
-        topcellsonly=True,
-        select='top',
-        layermap=None,
-        cellmap=None,
-        scale=1.0,
-        prefix='',
-        instantiate=True,
-        native=True,
-        bbox=False,
-        bboxbuf=0,
-        hull=None,
-        show_hull=False,
-        hull_based_bbox=None,
-        connect=None,
-        flat=False,
-        reuse=False,
-        cellsnotreused=None,
-        layermapmode=None):
+    filename,
+    cellname=None,
+    newcellname=None,
+    asdict=False,
+    topcellsonly=True,
+    select='top',
+    layermap=None,
+    cellmap=None,
+    scale=None,
+    prefix='',
+    instantiate=True,
+    native=True,
+    bbox=False,
+    bboxbuf=0,
+    hull=None,
+    show_hull=False,
+    hull_based_bbox=None,
+    connect=None,
+    flat=False,
+    reuse=False,
+    cellsnotreused=None,
+    cellsreused=None,
+    layermapmode=None,
+):
     """Load one or more GDS cells (and its instances) from <filename> into a Nazca cell.
 
     By default, load_gds returns a single cell in the specified gds file in
@@ -3858,7 +4037,7 @@ def load_gds(
         select (str): set the structure of the dictionary returned by this function.
             Only used when asdict is True.
         layermap (dict): layer mapping {old_layernumber: new_layernumber}
-        cellmap (dict): ceelname mapping {old_cellname: new_cellname}
+        cellmap (dict): cellname mapping {old_cellname: new_cellname}
         scale (float): scaling factor of the cell (default=1.0).
             Scaling in this function will be applied directly to the polygon
             structures, not as a modifier attribute like scaling/magnification
@@ -3881,11 +4060,14 @@ def load_gds(
             only the first cell occurance. Setting reuse=True is dangerous.
         cellsnotreused (list of str): list of cellnames to ignore for
             reuse if reuse=True
+        cellsreused (list of str): list of cellnames to reuse. If set all other cells will
+            not be reused and reuse and cellsnotreused will be ignored.
+
         topcellsonly (bool): default=True
 
     Returns:
         Cell | {cellname: Cell}: Nazca Cell containing the loaded gds cell(tree).
-            If asdict is True return a dictionary
+            If asdict is True return a dictionary.
 
     Example::
 
@@ -3911,6 +4093,14 @@ def load_gds(
 # Load gds and select topcell(s) to return
 # =============================================================================
     strm = gdsimp.GDSII_stream(filename, layermap=layermap, layermapmode=layermapmode)
+    if scale is None:
+        scale = strm.gds_db_unit / gb.gds_db_unit
+        # print(f"scale: {os.path.basename(filename)}, {strm.gds_db_unit}, {gb.gds_db_unit}, {scale}")
+        if scale != 1.0:
+            main_logger(
+                f"Imported gds '{filename}' will be scale corrected by factor {scale}.",
+                "info"
+            )
 
     if isinstance(filename, str):
         fln_or_buf = filename
@@ -4022,6 +4212,7 @@ Cell name '{3}' in file '{1}' {4}is already in use in the design.
             topcellsonly=topcellsonly,
             select=select,
             reuse=reuse,
+            cellsreused=cellsreused,
             cellsnotreused=cellsnotreused)
     else:  # non-native
         with Cell('load_gds', celltype='mask', instantiate=instantiate) as maskcell:
@@ -4038,7 +4229,8 @@ Cell name '{3}' in file '{1}' {4}is already in use in the design.
             maskcell.bboxbuf = bboxbuf
             maskcell.hull_based_bbox = hull
 
-    cfg.gdsload = False
+    cfg.gdsload = ""
+    cfg.gdsloadstore = ""  # clear for generating new warnings in a next gds file.
     return maskcell
 
 
@@ -4102,8 +4294,69 @@ def show_cp(radius=10, width=1, layer='dump'):
         None
     """
     if isinstance(radius, Node):
-        raise Exception(f"To show pin '{radius.name}' use show_pin() instead of show_cp().")
+        raise Exception(f"To show pin '{radius.name}' use method show_pin() instead of show_cp().")
     show_pin(pin=None, radius=radius, width=width, layer=layer)
+
+
+def log_pin(pin=None, label="", show=True, layer='dump'):
+    """Generate log string where a pin is (cell + location) and lable it.
+
+    Optionally visualize the location of the pin with the label in the layout.
+
+    Args:
+        pin (Node): pin to log. default=cp
+        label (str): label to identify the log
+        show (bool): show the pin in the layout
+        layer (str | int | (int, int)): layer indentifier for visualization. default='dump'
+
+    Returns:
+        str: message to put in a logfile, e.g. via nd.logging.info(...)
+    """
+    height = 5
+    if pin is None:
+        pin = cfg.cp
+    try:
+        pinname = pin.up.name
+    except:
+        pinname = pin.name
+    logstr = f"log_pin with label '{label}' in cell '{cfg.active_cell().cell_name}' = {pin.fxya()} for pin.name = '{pinname}', pin.id = {pin.id}"
+    if show:
+        show_pin(pin=pin, layer=layer)
+        cp = cfg.cp
+        font.text(text=label, height=height, align='cc', layer=layer).put(pin)
+        cfg.cp = cp
+    try:
+        logger.info(logstr)
+    except:
+        return logstr
+
+
+# See also show_pin()
+wherecnt = count()
+def whereami(text='here', size=100, pin=None):
+    """Show current pointer position as arrow in the layout.
+
+    Args:
+        text (str): annotation text
+        size (float): size of the annotation
+
+    Returns:
+        None
+    """
+    layer = 500
+    cp_store = cfg.cp
+    if pin is None:
+        pin = cfg.cp
+    points = [
+        (0, 0), (-0.5, 0.5), (-0.4, 0.25), (-1, 0.3), (-1, -0.3),
+        (-0.4, -0.25), (-0.5, -0.5)]
+    points = [(x*size,y*size) for x, y in points]
+    with Cell('I am'.format(wherecnt)) as crisis:
+        Polygon(layer=layer, points=points).put(0)
+        text(text+' ', height=size/4, align='rc', layer=layer).put(0)
+
+    crisis.put(pin)
+    cfg.cp = cp_store
 
 
 tab_elm = '. '
@@ -4599,14 +4852,15 @@ class Netlist:
     def celltree_iter_base(
         self,
         icnode,
-        hierarchy='full', # ['flat', 'self', 'full']
+        hierarchy='full', # ['flat', 'self', 'full', 'apply']
         position=None,
         level=0,
         infolevel=0
     ):
         """Generator to iterate over cell of <cnode>, top-down, go deep first.
 
-        The tree decents from the provided cnode into instantiated cnode(s).
+        The tree descents from the provided cnode into instantiated cnode(s)
+        until the no deeper instances are available.
         For decending into an instance, the inode:
         - look up the cell object the instance represents,
         - take that cell's cnode and use it to seed the next level.
@@ -4622,24 +4876,33 @@ class Netlist:
             (Node, int, Pointer, bool, scale): (cnode, level, position, flip).
                 Yields next cell, its level in the hierarchy and position
         """
-       # Get the cnode of the cell cnode or inode
-        #     Hence, always start the tree with a cell.
+        # Get the cnode of the cell cnode or inode
+        #   Hence, always start the tree with a cell.
         cnode = icnode.cell.cnode
         if position is None:
             position = Pointer(0, 0, 0)
         if infolevel > 3:
             print('{}: cnode={}, name={}, level={}'.format(
-                '  '*infolevel, cnode, cnode.cell.cell_name, level))
+                '  '*infolevel, cnode, cnode.cell.cell_name, level)
+            )
 
         # stack of cnode-tree:
-        nodes = [(cnode, level, position, False, 1.0)]
+        path = []
+        nodes = [(cnode, level, position, False, 1.0, cnode)]
         while nodes:
-            cnode, level, position, flip, scale = nodes[-1]
-            yield  cnode, level, position, flip, scale
+            level_old = level
+            cnode, level, position, flip, scale, next_node = nodes[-1]
+            if level > 0 and level <= level_old:
+                for _ in range(level_old - level + 1):
+                    del path[-1]
+            path.append(next_node)
+            #P = '/'.join([a.cnode.cell.cell_name for a in path])
+            #print(level, len(nodes), P)
+            yield cnode, level, position, flip, scale, path
             self.cnodes_visited.add(cnode)
             del nodes[-1]
             next_nodes = list(cnode.instance_iter())
-            for next_node in next_nodes:
+            for next_node in next_nodes:  # append nodes list with all next_nodes
                 cnode = next_node.cell.cnode
                 flip = next_node.flip
                 scale = next_node.scale
@@ -4652,9 +4915,9 @@ class Netlist:
                     for xi in range(nx):
                         for yi in range(ny):
                             orgnew = Pointer(x0+xi*dx1+yi*dx2, y0+xi*dy1+yi*dy2, a0)
-                            nodes.append((cnode, level+1, orgnew, flip, scale))
+                            nodes.append((cnode, level+1, orgnew, flip, scale, next_node))
                 else:
-                    nodes.append((cnode, level+1, next_node.pointer, flip, scale))
+                    nodes.append((cnode, level+1, next_node.pointer, flip, scale, next_node))
 
 
     def celltree_iter(
@@ -4666,7 +4929,8 @@ class Netlist:
             infolevel=0,
             cellmap=None,
             topdown=False,
-            revisit=False):
+            revisit=False
+        ):
         """Generator to iterate top-down or bottom-up (default) over the celltree in <cell>.
 
         Translation, flipping and flattening are applied.
@@ -4715,14 +4979,14 @@ class Netlist:
             """
             while depth >= stop:
                 # get a cellopen value:
-                if not topdown: # bottom-up
+                if not topdown:  # bottom-up
                     if export_levels[-1] in stack_instant.keys():
-                        # export level not yielded yet, hence yield it
+                        # yield cell opening for export level:
                         cellparams = stack_instant.pop(export_levels[-1])
                         stack_export_level[export_levels[-1]] = cellparams
                         yield cellparams
 
-                    # yield a non-instantiated level
+                    # yield a non-instantiated level:
                     if depth not in export_levels:
                         cellparams = stack_noninstant.pop()
                         yield cellparams
@@ -4731,7 +4995,7 @@ class Netlist:
                 if export_flag:
                     cellparams = stack_export_level[depth]
 
-                if translist_loc:  # not []: go level up in lists
+                if translist_loc:  # not []: go level up in location lists
                     translist_loc.pop()
                     fliplist_loc.pop()
                     translist_glob.pop()
@@ -4745,34 +5009,27 @@ class Netlist:
                          export_flag,
                          )
                      )
+
                 if depth in export_levels:
                     export_levels.pop()
-                    yield cellinfo_close(
-                        cell_start=None,
-                        cell_instantiate=None,
-                        cell_close=CLOSECELL,
-                        cell_end=True,
-                        cell=cellparams.cell,
-                        level=depth,
-                        cell_create=False,
-                        cell_open=False,
-                        iters=iters_close,
-                        new_cell_name='',
-                        hierarchy=hierarchy,)
-                else: # no export_level
+                    CLOSE = CLOSECELL  # if an export level yield cell closure:
+                else:  # no export_level
                     scalelist.pop()
-                    yield cellinfo_close(
-                        cell_start=None,
-                        cell_instantiate=None,
-                        cell_close=not CLOSECELL,
-                        cell_end=True,
-                        cell=cellparams.cell,
-                        level=depth,
-                        cell_create=False,
-                        cell_open=False,
-                        iters=iters_close,
-                        new_cell_name='',
-                        hierarchy=hierarchy,)
+                    CLOSE = not CLOSECELL
+                yield cellinfo_close(
+                    cell_start=None,
+                    cell_instantiate=None,
+                    cell_close=CLOSE,
+                    cell_end=True,
+                    cell=cellparams.cell,
+                    level=depth,
+                    cell_create=False,
+                    cell_open=False,
+                    iters=iters_close,
+                    new_cell_name='',
+                    hierarchy=hierarchy,
+                    branch=cellparams.branch,
+                )
                 depth -= 1
             return depth
 
@@ -4785,14 +5042,15 @@ class Netlist:
              'new_cell_name',    # name of the cell
              'level',            # depth od the cell in the hierarchy (top=0)
              'parent_level',     # parent level, taken into account flattend levels
-             'transflip_loc',    # position- and flip state in w.r.t. the parent cell
-             'transflip_glob',   # position- and flip state in w.r.t. the to cell
+             'transflip_loc',    # position and flip state w.r.t. the parent cell
+             'transflip_glob',   # position and flip state w.r.t. the to cell
              'scale',            # scaling factor of the parent cell after export
              'iters',            # list of iterators of the elements in the cell
              'cell_close',       # for compatibility with cellinfo_close tuple only
              'cell_end',         # for compatibility with cellinfo_close tuple only
              'instantiate',      # bool based on hierarchy setting: 'flat', 'self' or 'full'
              'hierarchy',        # how to deal with instantiation
+             'branch',
             ]
         )
         cellinfo_close = namedtuple('cellinfo_close',
@@ -4807,7 +5065,8 @@ class Netlist:
              'cell_open',        # for compatibility with cellinfo_open tuple only
              'new_cell_name',    # for compatibility with cellinfo_open tuple only
              'hierarchy',        # how to deal with instantiation
-             ]
+             'branch',
+            ]
         )
 
         tab_open  = '> '
@@ -4861,7 +5120,7 @@ class Netlist:
             infolevel=infolevel,
         )
 
-        for cnode, level, org, flip, scale in cell_iter:
+        for cnode, level, org, flip, scale, branch in cell_iter:
             if level > level_reuse:
                 # skip cells that are part of a reused cell.
                 continue
@@ -4983,6 +5242,7 @@ class Netlist:
                     iters=element_iters,
                     instantiate=inst,
                     hierarchy=hierarchy,
+                    branch=branch.copy(),
                 )
                 if topdown:
                     yield iterparams

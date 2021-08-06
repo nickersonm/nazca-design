@@ -26,6 +26,7 @@ import os
 import sys
 import datetime
 import logging as log
+import matplotlib.pyplot as plt
 from .version import __version__
 
 
@@ -75,6 +76,7 @@ def logfile(name='nazca.log', level='INFO', formatter=None, stdout=True, create=
         formatter (str): format string, if None a default formatter will be used
         stdout (bool): set False to switch off a copy of the log to stdout
             (default=True)
+        create (bool):
 
     Example:
          Create a filehandler with the filename of your python file and switch
@@ -88,9 +90,12 @@ def logfile(name='nazca.log', level='INFO', formatter=None, stdout=True, create=
     Returns:
         logger: logger
     """
+    global globname, datetimestamp
+
     name = os.path.basename(name)
     if name[-4:] != '.log':
         name = '{}.log'.format(name)
+    globname = name
 
     if formatter is None:
         formatter = formatter0
@@ -134,6 +139,7 @@ def logfile(name='nazca.log', level='INFO', formatter=None, stdout=True, create=
         logger0.info('datetime: {}'.format(now.strftime("%Y-%m-%d %H:%M")))
         logger0.info('logging level: {}'.format(level))
         logger0.info('Nazca Design version: {}'.format(__version__))
+        datetimestamp = now
     return logger0
 
 
@@ -149,3 +155,41 @@ else:
     def print_except(e):
         pass
 
+
+def summary(filename="", plot=True):
+    """Summarize errors and warnings in the logfile.
+
+    Adds log info entry for number of warning and errors in the logfile.
+
+    Args:
+        filename (str): logfile, default the main logger.
+        plot (bool): show warnings + errors in a bar chart, default=True
+
+    Retrun:
+        None
+    """
+    from matplotlib.ticker import MaxNLocator
+    global globname, datetimestamp
+
+    if filename == "":
+        filename = globname
+    warnings = 0
+    errors = 0
+    with open(filename, 'r') as F:
+        for line in F:
+            if "ERROR" in line:
+                errors += 1
+            elif "WARNING" in line:
+                warnings += 1
+    fig = plt.figure(figsize=(5, 5))
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.set_title(f"Logfile '{globname}' - {datetimestamp.strftime('%Y-%m-%d %H:%M')}")
+    level = ['WARNINGS', 'ERRORS']
+    occurance = [warnings, errors]
+    barlist = ax.bar(level, occurance)
+    barlist[0].set_color('y')
+    barlist[1].set_color('r')
+    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+    plt.show()
+    logger.info(f"total number of WARNINGS: {warnings}")
+    logger.info(f"total number of ERROR: {errors}")

@@ -33,8 +33,8 @@ import pandas as pd
 from .version import __version__
 from . import cfg
 from .simglobal import sim
-from .slabmode import *
-from .slabsolver import *
+#from .slabmode import *
+#from .slabsolver import *
 from .xsection import *
 from .plotting import *
 from .gds import *
@@ -48,6 +48,7 @@ from .colormap import *
 from .netlist import *
 from .layout import *
 from .pathfinder import *
+from .index import *
 
 from . import geometries as geom
 from . import icons as icons
@@ -62,6 +63,12 @@ from .logging import *
 from .angle_drc import *
 
 from .pdk_template import *
+from .polysplitter import *
+
+# solvers
+from .solver_slab2020 import *
+from .solver_multilayerc import *
+
 
 
 # Nazca module path

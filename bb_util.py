@@ -37,6 +37,7 @@ import hashlib
 import nazca as nd
 from nazca import cfg
 from nazca.logging import logger
+from nazca.clipper import merge_polygons
 
 #from nazca.util import parameters_to_string
 import nazca.geometries as geom
@@ -305,8 +306,8 @@ def get_Cell(name):
     if name in cfg.cellnames.keys():
         return cfg.cellnames[name]
     else:
-        mes = "Error: Requested cell with name '{}' not existing."\
-            "Availabe are: {}.".format(name, sorted(cfg.cellnames.keys()))
+        mes = f"Error: Requested cell with name '{name}' not existing. "\
+            f"Availabe are the following {len(cfg.cellnames)} cells: {sorted(cfg.cellnames.keys())}."
         logger.exception(mes)
         raise Exception(mes)
 
@@ -544,7 +545,7 @@ def put_parameters(parameters=None, pin=None):
     return text
 
 
-def cellname(cellname=None, length=0, width=None, align='lc'):
+def cellname(cellname=None, length=0, width=None, align='lc', name_layer=None):
     """Create the cellname as a text cell.
 
     Args:
@@ -552,6 +553,7 @@ def cellname(cellname=None, length=0, width=None, align='lc'):
         length (float): length available for the BB name in um
         width (float):
         align (str): text alignment (see nazca.text, default = 'lc')
+        name_layer (str): name of the layer to be used for bbox name
 
     Returns:
         Cell: text with cellname
@@ -565,9 +567,12 @@ def cellname(cellname=None, length=0, width=None, align='lc'):
     else:
         maxheight = cfg.cellname_max_height
 
+    if name_layer is None:
+        name_layer = 'bbox_name'
+
     length = length * cfg.cellname_scaling
     texth = min(maxheight, abs(length) / nd.linelength(cellname, 1))
-    txt = nd.text(cellname, texth, layer='bbox_name', align=align)
+    txt = nd.text(cellname, texth, layer=name_layer, align=align)
     return txt
 
 
@@ -751,8 +756,8 @@ def _makestub(xs_guide=None, width=0, length=2.0, shape=None, pinshape=None,
     Returns:
         str: name of the stub
     """
-    if cfg.black_stub_xs is not None:
-        xs_logic = cfg.black_stub_xs
+    if cfg.validation_stub_xs is not None:
+        xs_logic = cfg.validation_stub_xs
     else:
         xs_logic = cfg.stubmap.get(xs_guide, None)
         if xs_logic is None:  # if no stub defined, use the xs as its own stub.
@@ -870,8 +875,7 @@ def put_stub(pinname=None, length=None, shape='box', pinshape=None, pinsize=None
 
     # prepare pin:
     if pinname is None or pinname == []:
-        pinname = [name for name, pin
-            in cell.pin.items() if pin.chain == 1]
+        pinname = [name for name, pin in cell.pin.items() if pin.chain == 1]
     elif isinstance(pinname, str):
         pinname = [pinname]
     elif isinstance(pinname, nd.Node):
@@ -886,8 +890,8 @@ def put_stub(pinname=None, length=None, shape='box', pinshape=None, pinsize=None
 
     # prepare pinstyles
     stylestr = 'default'
-    if cfg.black_pinstyle is not None:
-        pinstyle = cfg.black_pinstyle
+    if cfg.validation_pinstyle is not None:
+        pinstyle = cfg.validation_pinstyle
 
     pinstylenames = cfg.pinstyles.keys()
     if pinstyle in pinstylenames:
@@ -911,7 +915,7 @@ def put_stub(pinname=None, length=None, shape='box', pinshape=None, pinsize=None
                     width = 0
                 else: # define stub + pin from style
                     xs = node.xs
-                    if cfg.black_pinstyle is None:
+                    if cfg.validation_pinstyle is None:
                         xs_pinstyle = nd.get_xsection(xs).pinstyle
                         if xs_pinstyle in pinstylenames and pinstyle is None:
                             stylestr = xs_pinstyle
@@ -988,6 +992,63 @@ def put_stub(pinname=None, length=None, shape='box', pinshape=None, pinsize=None
             logger.exception(mes)
             raise Exception(E)
 
+
+def validation_style(
+    on=True, 
+    stub_layer=None, 
+    pin_style=None,
+    validation_layermapmode="none",
+    validation_layermap= None,
+):
+    """Set layers and pinstyle and layermap for BB validation stubs.
+    
+    Args: 
+        on (bool): default=True, turn on validation style
+        stub_layer (int, (int, int), str): layer of the stub.    
+        pin_style (dict): optional pinstyle dict for the arrow and stub.
+        validation_layermapmode (str): 
+        validation_layermap (dict): {in_layer: out_layer}
+            
+    Returns:
+        None
+    """    
+    if not on:  # reset validation settings
+        cfg.validation_pinstyle = None
+        cfg.validation_stub_xs = None
+        cfg.validation_layermapmode = "none"
+        cfg.validation_layermap = None
+        return None
+         
+    if stub_layer is None:
+        stub_layer = cfg.default_layers['validation_stub']
+        
+    nd.add_xsection(name="validation_stub")
+    nd.add_layer(name="validation_stub", layer=stub_layer)
+    nd.add_layer2xsection(xsection="validation_stub", layer=stub_layer)
+    
+    nd.cfg.store_pin_attr = True
+   
+    if pin_style is None:
+        validation_pinstyle = {
+            'shape': 'arrow_full',
+            'size': 1.0,
+            'layer': "bb_pin",  # use string name
+            'annotation_layer': 'bbox_pin_text',  # use string name
+            'annotation_move': (0, 0),
+            'stub_length': 1.0
+            }
+        nd.add_pinstyle('validation', validation_pinstyle)
+    else:
+        pin_style['annotation_move'] = (0, 0)  # always force to pin location
+        nd.add_pinstyle('validation', pin_style)
+    
+    # set global parameters that for overrideing the stub xs and the pinstyle:
+    cfg.validation_pinstyle = "validation"
+    cfg.validation_stub_xs = "validation_stub"
+
+    cfg.validation_layermapmode = validation_layermapmode
+    cfg.validation_layermap = validation_layermap
+      
 
 def export_bb2png(cellcalls, path='', close=True, bbox_pins=True):
     """Create png image for all cells in <cellcalls>.
@@ -1127,7 +1188,7 @@ def bb_fingerprint(cellcalls, save=False, filename='fingerprint.json', infolevel
             print("Saved fingerprint to {}".format(filename))
         except Exception as E:
             print(f"ERROR in json.dump of fingeprint: {E}")
-            nd.main_logger(f"ERROR in json.dump of fingeprint: {E}", "error")    
+            nd.main_logger(f"ERROR in json.dump of fingeprint: {E}", "error")
     if infolevel > 1:
         pprint(fingerprint)
     return fingerprint
@@ -1207,7 +1268,7 @@ bbox_pinnames = [
     'cc']
 
 def put_boundingbox(pinname, length, width, raise_pins=True, outline=True,
-        align='lc', name=True, params=True, move=(0, 0, 0)):
+        align='lc', name=True, params=True, move=(0, 0, 0), name_layer=None):
     """Create bounding box (bbox) cell inside the active cell.
 
     This function places a bbox cell and raises by default the bbox pins into
@@ -1224,6 +1285,7 @@ def put_boundingbox(pinname, length, width, raise_pins=True, outline=True,
         name (bool): display the (active) cell name in the bbox. (default = True)
         params (bool): add parameter annotation to the bbox
         move (tuple): move the bbox placement by (float, float, float)
+        name_layer (str): name of the layer to be used for bbox name
 
     Returns:
         None
@@ -1270,8 +1332,13 @@ def put_boundingbox(pinname, length, width, raise_pins=True, outline=True,
                 )
 
         if name:
-            cellname(cellname=_paramsname, length=length, width=width, align='cc').\
-                put(C.pin['cc'])
+            cellname(
+                cellname=_paramsname,
+                length=length,
+                width=width,
+                align='cc',
+                name_layer=name_layer,
+            ).put(C.pin['cc'])
         if params:
             put_parameters(parameters=_parameters, pin=C.pin['cc'])
 
@@ -1306,10 +1373,27 @@ def put_boundingbox(pinname, length, width, raise_pins=True, outline=True,
     return None
 
 
-def load_gdsBB(gdsfilename, cellname, pinfilename=None, newcellname=None,
-        layermap=None, cellmap=None, flip=False, flop=False, scale=1.0, stubs=True,
-        native=True, bbox=False, bboxbuf=0, hull=None, prefix='', suffix='_stubs',
-        instantiate=None, flat=False, layermapmode=None):
+def load_gdsBB(
+    gdsfilename,
+    cellname,
+    pinfilename=None,
+    newcellname=None,
+    layermap=None,
+    cellmap=None,
+    flip=False,
+    flop=False,
+    scale=None,
+    stubs=True,
+    native=True,
+    bbox=False,
+    bboxbuf=0,
+    hull=None,
+    prefix='',
+    suffix='_stubs',
+    instantiate=None,
+    flat=False,
+    layermapmode=None,
+):
     """Load a gds cell and the corresponding pin info from file.
 
     This function uses method 'load_gds' for loading the gds file
@@ -1394,28 +1478,33 @@ def load_gdsBB(gdsfilename, cellname, pinfilename=None, newcellname=None,
         else:
             s = 1.0
         if pinfilename is not None:
-            df = pd.read_csv(pinfilename, delimiter= ',', skiprows=1, header=None,
-                names = ['io', 'x', 'y', 'a', 'xs', 'w'])
-            df.fillna(0.0, inplace=True)
-            for row in df.itertuples():
-                i, io, x, y, a, xs, w = row
-                try:
-                    xs = xs.strip()
-                    if xs.upper() == 'NONE':
+            if not os.path.exists(pinfilename):
+                nd.main_logger(f"Pin file not found '{pinfilename}'. No pins and stubs placed.", "error")
+            else:
+                df = pd.read_csv(pinfilename, delimiter= ',', skiprows=1, header=None,
+                    names = ['io', 'x', 'y', 'a', 'xs', 'w'])
+                df.fillna(0.0, inplace=True)
+                for row in df.itertuples():
+                    i, io, x, y, a, xs, w = row
+                    try:
+                        xs = xs.strip()
+                        if xs.upper() == 'NONE':
+                            xs = None
+                    except:
+                        logger.exception('xsection not parseble.')
                         xs = None
-                except:
-                    logger.exception('xsection not parseble.')
-                    xs = None
-                try:
-                    w = float(w)
-                except:
-                    if w is not None and w != 'None':
-                        logger.warning("load_gdsBB: Could not cast width to float on pin '{}': {}".\
-                            format(io, w))
-                    w = 0.0
-                nd.Pin(name=io, xs=xs, width=w).put(scale*x, s*scale*y, a)
-                if stubs: #and xs is not None :
-                    put_stub(io)
+                    try:
+                        w = float(w)
+                    except:
+                        if w is not None and w != 'None':
+                            logger.warning("load_gdsBB: Could not cast width to float on pin '{}': {}".\
+                                format(io, w))
+                        w = 0.0
+                    if scale is None:
+                        scale = 1.0
+                    nd.Pin(name=io, xs=xs, width=w).put(scale*x, s*scale*y, a)
+                    if stubs: #and xs is not None :
+                        put_stub(io)
         if instantiate and bbox:
             C.autobbox = True
             C.bboxbuf = bboxbuf
@@ -1478,34 +1567,40 @@ def image(name, layer=1, size=256, pixelsize=1, threshold=0.5,
         cellname = os.path.basename(name)
     p = pixelsize
     threshold = int(threshold * 256)
-    a = {'lb', 'cb', 'rb', 'lc', 'cc', 'rc', 'lt', 'ct', 'rt'}
+    a = {"lb", "cb", "rb", "lc", "cc", "rc", "lt", "ct", "rt"}
     if align not in a:
         mes = "Invalid alignment specification '{}' for image '{}'.".format(align, name)
         mes += "Allowed values are {}.".format(a)
         mes += "Using default value 'cc'"
         logger.warning(mes)
-        align = 'cc'
-    halign = {'l': 0, 'c': -0.5, 'r': -1}
-    valign = {'b': 0, 'c': -0.5, 't': -1}
+        align = "cc"
+    halign = {"l": 0, "c": -0.5, "r": -1}
+    valign = {"b": 0, "c": -0.5, "t": -1}
 
     im = Image.open(name)
-    gray = im.convert('L')
+    gray = im.convert("L")
     # resize keep aspect, only if smaller
     gray.thumbnail((size, size), Image.ANTIALIAS)
-    bw = gray.point(lambda x: 0 if x<threshold else 255, '1')
+    bw = gray.point(lambda x: 0 if x < threshold else 255, "1")
     pix = _PIL2array(bw)
     width, height = bw.size
-    width_tot = width*p + 2*box_buf
-    height_tot = height*p + 2*box_buf
-    logger.info('Generating {}x{} pixels image of {:.0f}x{:.0f} um2, edge is {} um.'.\
-         format(width, height, width*p, height*p, box_buf))
+    width_tot = width * p + 2 * box_buf
+    height_tot = height * p + 2 * box_buf
+    logger.info(
+        "Generating {}x{} pixels image of {:.0f}x{:.0f} um2, edge is {} um.".format(
+            width, height, width * p, height * p, box_buf
+        )
+    )
     h0 = halign[align[0]] * width_tot
     v0 = valign[align[1]] * height_tot
 
+    polygons = []
+
     with nd.Cell(cellname) as C:
         for line in range(height):
-            x1 = x0 = lb = lw = 0
-            y0 = (height - line) * p
+            x1 = x0 = h0 + box_buf
+            lb = lw = 0
+            y0 = (height - line) * p + v0 + box_buf
             for pixel in pix[line]:
                 if pixel == invert:
                     lb += 1
@@ -1516,20 +1611,27 @@ def image(name, layer=1, size=256, pixelsize=1, threshold=0.5,
                     lw += 1
                     if lb > 0:
                         x1 = x0 + lb * p
-                        xy = [(x0, y0), (x1, y0), (x1, y0-p), (x0, y0-p)]
-                        nd.Polygon(layer=layer, points=xy).\
-                            put(h0+box_buf, v0+box_buf, 0)
+                        xy = [(x0, y0), (x1, y0), (x1, y0 - p), (x0, y0 - p)]
+                        polygons.append(xy)
                         x0 = x1
                         lb = 0
             if lb > 0:
                 x1 = x0 + lb * p
-                xy = [(x0, y0), (x1, y0), (x1, y0-p), (x0, y0-p)]
-                nd.Polygon(layer=layer, points=xy).\
-                    put(h0+box_buf, v0+box_buf, 0)
+                xy = [(x0, y0), (x1, y0), (x1, y0 - p), (x0, y0 - p)]
+                polygons.append(xy)
+        for pol in nd.clipper.merge_polygons(polygons):
+            nd.Polygon(points=pol, layer=layer).put()
 
         if box_layer is not None:
-            nd.Polygon(layer=box_layer, points=[(0, 0), (0, height_tot),
-                (width_tot, height_tot), (width_tot, 0)]).put(h0, v0, 0)
+            nd.Polygon(
+                layer=box_layer,
+                points=[
+                    (0, 0),
+                    (0, height_tot),
+                    (width_tot, height_tot),
+                    (width_tot, 0),
+                ],
+            ).put(h0, v0, 0)
     return C
 
 

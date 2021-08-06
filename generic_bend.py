@@ -348,11 +348,13 @@ if __name__ == "__main__":
     # from removing points which are needed to check the number of points.
     A, B, L, Rmin = gb_coefficients(xya, radius1=0, radius2=0)
     xy = curve2polyline(gb_point, xya, 0.1, (A, B, L))
-    xy = nd.util.polyline2polygon(xy, width=2)
-    nd.Polygon(layer=202, points=xy).put(0, 0, 10)
+    polygons = nd.util.polyline2polygons(xy, width=2)
+    for polygon in polygons:
+        nd.Polygon(layer=202, points=polygon).put(0, 0, 10)
     xy = curve2polyline(gb_point, xya, 0.001, (A, B, L))
-    xy = nd.util.polyline2polygon(xy, width=2)
-    nd.Polygon(layer=203, points=xy).put(0, 0, 10)
+    polygons = nd.util.polyline2polygons(xy, width=2)
+    for polygon in polygons:
+        nd.Polygon(layer=203, points=polygon).put(0, 0, 10)
 
     # Curve with different accuracy and curvature at start and finish.
     A, B, L, Rmin = gb_coefficients(xya, radius1=300, radius2=-100)
@@ -390,13 +392,15 @@ if __name__ == "__main__":
 
     A, B, L, Rmin = gb_coefficients(xya, radius1=300, radius2=-100)
     xy = curve2polyline(gb_point, xya, 0.001, (A, B, L))
-    xy = nd.util.polyline2polygon(xy, width=varwidth)
-    nd.Polygon(layer=68, points=xy).put(-300, 150, 0)
+    polygons = nd.util.polyline2polygons(xy, width=varwidth)
+    for polygon in polygons:
+        nd.Polygon(layer=68, points=polygon).put(-300, 150, 0)
 
     # Sine bend
     xy = curve2polyline(sinebend_point, (100, 20, 0), 0.001, (100, 20))
     nd.Polyline(layer=2, width=2, points=xy).put(-300, 0, 0)
-    xy = nd.util.polyline2polygon(xy, width=2)
-    nd.Polygon(layer=203, points=xy).put(-300, 0, 0)
+    polygons = nd.util.polyline2polygons(xy, width=2)
+    for polygon in polygons:
+        nd.Polygon(layer=203, points=polygon).put(-300, 0, 0)
 
     nd.export_gds()

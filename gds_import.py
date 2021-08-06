@@ -542,7 +542,7 @@ class GDSII_record:
             e,
             gb.GDS_record.name[self.rtype],
             gb.GDS_datatype.name[self.dtype],
-            self.rlen-4)
+            self.rlen - 4)
         if self.dtype == gb.GDS_datatype.ASCII:
             s += '\n{} "{}"'.format(d, self.data)
         elif self.dtype != gb.GDS_datatype.NODATA:
@@ -646,6 +646,8 @@ class GDSII_stream:
             cellmap = {}
         if layermap is None:
             layermap = {}
+        if cfg.layermap:  # add the global layer as a start
+            layermap = {**cfg.layermap, **layermap}
 
         self.header = []
         self.cells = OrderedDict()  # All cells: {cellname: GDSII_cell}
@@ -660,6 +662,8 @@ class GDSII_stream:
         self.layermap = layermap
         self.layermapmode = layermapmode
         self.cellmap = {}
+        self.gds_db_user = None
+        self.gds_db_unit = None
 
         if isinstance(filename, str):
             self.filename = filename
@@ -1035,9 +1039,9 @@ class GDSII_stream:
                 lay = rec.data[0]
                 continue
 
-            #DATATYPE after LAYER: boundary, path
-            #TEXTTYPE after LAYER: annotation
-            #BOXTYPE after LAYER: box
+            # DATATYPE after LAYER: boundary, path
+            # TEXTTYPE after LAYER: annotation
+            # BOXTYPE after LAYER: box
             elif (rec.rtype == gb.GDS_record.DATATYPE) or \
                  (rec.rtype == gb.GDS_record.TEXTTYPE) or \
                  (rec.rtype == gb.GDS_record.BOXTYPE):
@@ -1132,6 +1136,8 @@ class GDSII_stream:
         for rec, pos in rec_iter:
             self.header.append(rec)
             if rec.rtype == gb.GDS_record.UNITS:
+                self.gds_user = rec.data[0]
+                self.gds_db_unit = rec.data[1]
                 break # last record of header
 
         # Read all the cells, ends on ENDLIB record (end of file).

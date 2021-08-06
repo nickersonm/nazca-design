@@ -38,6 +38,11 @@ plt_fontsize = 10 #fontsize of annotations in the layout
 plt_background_inside = '#FFFFFF' #background color inside the axes
 plt_background_outside = '#EEEEEE' #background color outside the axes
 plt_cmap = [] # list of the colors in the cmap
+# Flag for redirecting matplotlib export to user defined Figure and Axes.
+# To use, set plt_fig = (<figure>, <axes>), where <figure> and <axes> are one Figure and one Axes object from matplotlib
+# e.g. <figure> and <axes> may come from functions as matplotlib.pyplot.subplots or  matplotlib.pyplot.subplot2grid.
+# Default is None (required object will be created at runtime, and result displayed interactively).
+plt_fig = None
 
 
 # font setting for matplotlib generated mask output
@@ -85,10 +90,11 @@ redirect_unknown_layers = False
 # Dictionary for default layers for special purpose objects:
 # They are set in a dict so they can be adjusted during runtime
 # and are easily accessible by 'key'.
+# These layers will automatically be created when called for in a layer setting.
 default_layers = {
     'bb_pin':             (1001, 0),  # layer for the pin symbol (arrow)
     'bb_pin_text':        (1002, 0),  # layer for pin name annotation
-    'bb_pin_attr':        (1002, 1),  # layer for pin name and attributes annotations
+    'bb_pin_attr':        (1002, 1),  # layer for pin attributes annotations
     'bb_parameter_text':  (1003, 0),  # layer to store pcell parameters
     'bb_name':            (1004, 0),  # layer to store pdk-version and owner info: see bb_version_layer
 
@@ -108,13 +114,14 @@ default_layers = {
     'error':              (1111, 1),  # layer to display errors, e.g. to a bend with too small radius
 
     'bb_flag':            (1051, 0),  # layer to indicate a black box
+    'validation_stub':    (1052, 0),  # layer for black box BB validation
 
     'drc_xs':             (1500, 0),  # display pin2pin drc on xsection
     'drc_angle':          (1500, 1),  # display pin2pin drc on angle
     'drc_width':          (1500, 2),  # display pin2pin drc on width
     'drc_sym':            (1500, 3),  # display pin2pin drc on width
     'drc_instance_angle': (1510, 0),  # display instantiation drc on angle
-    }
+}
 
 
 # Layer name to scan for BB versioning:
@@ -274,7 +281,8 @@ parameter_style = 'default'
 # Note this conversion happens automatically for formats without polylines, e.g. png.
 # default = False
 export_polyline_as_polygon = False
-
+# GDS standard defines 600 points as maximum. This seems unnecessarily few points.
+maxpolygonpoints = 4000  # Safe maximum for most software.
 
 
 #==============================================================================
@@ -293,10 +301,9 @@ drc_ring_angle = (9, 1)
 drc_ring_width = (8, 1)
 drc_ring_sym   = (7, 1)
 
-drc_rule_xs = {} # dict map wich xsection can be connected
-drc_raise = False # raise a drc error to trace the error if True
-drc_cnt = None # raise a drc if drc_raise is True for a specific drc_cnt only (None raise all)
-drc = False # do drc on pin connections if True
+drc_rule_xs = {}  # dict map wich xsection can be connected
+drc_raise = False  # raise a drc error for trace-back the error if True
+drc = False  # do drc on pin connections if True
 
 drc_instance_angle = {'angle': {}}
 
@@ -316,6 +323,7 @@ drc_max_distance = 1e-4
 # Maximun angle to be considered smooth (in degrees)
 drc_max_angle = 5e-6
 
+autoconnectdistance = 0.0014  # max distance for autoconnecting pins when groupconnect = True
 
 # =============================================================================
 # uPDK
@@ -327,21 +335,29 @@ allowed_units = ['um', '']
 # initialize global variables into existence
 # =============================================================================
 cp = None
-self = None # active cell reference
-cells = [] # store open cells
-cellnames = dict() # list of all cells {cellname: Cell}
-basenames = dict() # {basenames" function_id}
-topcells = [] # Cells that have been collected to be parsed for GDS export
-xsall = dict() #foundry layer table
+self = None  # active cell reference
+cells = []  # store open cells
+cellnames = dict()  # list of all cells {cellname: Cell}
+basenames = dict()  # {basenames" function_id}
+topcells = []  # Cells that have been collected to be parsed for GDS export
+xsall = dict()  #foundry layer table
 xs_layers = dict() #foundry layer table
 #layerdict = dict()
-xsmap = None #map scriptnames of xs to technology names of xs.
-share = set() # set of cellname not to prefix.
+xsmap = None  # map scriptnames of xs to technology names of xs.
+share = set()  # set of cellname not to prefix.
 stubmap = {}
 default_df_xs = pd.DataFrame(default_xs)
 mask_layers = {default_xs_name: default_df_xs}
 XSdict = dict()
-hashme = False # for checking @hashme status
+hashme = False  # for checking @hashme status
+patchcell = False  # Keep set to False at all times.
+
+# Global layer map that will be added to gds loads if defined.
+# This can be used to solve non-unique layer mapping at a level higher up
+# and reach inside loaded ip-blocks if needed to remove non-unique mapping warnings
+# Default = {} or None, do not use any globl layer mapping.
+layermap = {}
+
 
 # =============================================================================
 # define pin shape polygons in a dictionary. Idealy shapes are normalized to 1.
@@ -352,23 +368,21 @@ pinshapes = {
     'arrow_left':      [(0, 0), (-0.5, 0.5), (-0.5, 0.25), (-0.7, 0.25), (-0.7, 0)],
     'arrow_right':     [(0, 0), (-0.5, -0.5), (-0.5, -0.25), (-0.7, -0.25), (-0.7, 0)],
     'circle':          [(0.5, 0), (0.353, 0.353), (0, 0.5), (-0.353, 0.353), (-0.5, 0), (-0.353, -0.353), (0, -0.5), (0.353, -0.353)],
-    'inv_pointer':     [(0, 0), (-0.25, 0.5), (-0.5, 0.5), (-0.5,-0.5), (-0.25, -0.5)]
+    'inv_pointer':     [(0, 0), (-0.25, 0.5), (-0.5, 0.5), (-0.5,-0.5), (-0.25, -0.5)],
     }
-
 
 
 # list of known pinstyles
 pinstylelabels = [
-    'shape',
-    'size',
-    'layer',
-    'annotation_layer',
-    'annotation_move',
-    'stub_length',
-    'pin_ignore',
-    'scale',
-    'edgecolor',
-    'fillcolor',
+    'shape',  # "pinshapes" label to access pinshape polygon
+    'size',  # size of the pin, default = 1.0
+    'layer',  # layer to place the pinshape polygon in
+    'annotation_layer',  # layer to place the pin name annotation in
+    'annotation_move',  # distance of pin annotation from actual pin location
+    'stub_length',  # length of the stub in um
+    'pin_ignore',  # list pin names to not visualize in png export
+    'edgecolor',  #  pinshape edge color in png export
+    'fillcolor',  #  pinshape fill color in png export
 ]
 def reset_pinstyles():
     global pinstyle, pinstyles, default_pinstyle
@@ -439,14 +453,23 @@ documentation_pins = False
 # in this case force another dict content in your code, e.g. {}
 # default = None  # no version forcing
 force_pdk_version = None
+force_nazca_version = None
+
 
 # For black box export with simplified layers and pins for validation
 # default = None  # add xs name string to overrule the existing stub
-black_stub_xs = None
+validation_stub_xs = None
 
 # For black box export with simplified layers and pins for validation
 # default = None  # use pinstyle name string to overrule the existing pin style
-black_pinstyle = None
+validation_pinstyle = None
+
+# For black box export with simplified layers and pins for validation
+# default = "none"  # no layer filtered
+validation_layermapmode = None
+
+# default = None  # No change w.r.t. layermapmode setting
+validation_layermap = None
 
 
 def active_cell():
