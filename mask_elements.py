@@ -1315,7 +1315,7 @@ def Tp_euler(
             else:
                 x1, y1 = 0, 0
 
-            C.length_geo = 2 * tradius * abs(arad)
+            C.length_geo = scale*ta # sum([ ((points[i][0]-points[i-1][0])**2 + (points[i][1]-points[i-1][1])**2)**0.5 for i in range(1,len(points))])
             p1 = nd.Pin('a0', io=0, width=width1, xs=xs, radius=0, show=True).put(0, 0, 180)
             p2 = nd.Pin('b0', io=1, width=width2, xs=xs, radius=radius, show=True).put(x1, y1, angle)
 
