@@ -988,7 +988,7 @@ def Tp_euler(width1=1.0, width2=1.0, radius=50, angle=90,
                     angleo=angle)
                 nd.Polygon(points=shape, layer=lay).put(0)
 
-            nd.length_geo = 2 * radius * abs(angle)
+            C.length_geo = scale*ta # sum([ ((points[i][0]-points[i-1][0])**2 + (points[i][1]-points[i-1][1])**2)**0.5 for i in range(1,len(points))])
             nd.Pin('a0').put(0, 0, 180)
             x1, y1 = points[-1]
             nd.Pin('b0').put(x1, y1, angle)

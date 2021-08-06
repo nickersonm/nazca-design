@@ -2188,7 +2188,7 @@ For more information, check the documentation of 'cobra_p2p'.
             if abs(dy) < 1e-6 and abs(da) < 1e-6 and \
                     abs(radius1) < 1e-6 and abs(radius2) < 1e-6:
                 # Straight line (or taper) will do just fine.
-                e1 = self.ptaper(length=dx, width1=width1, width2=width2).put(0)
+                e1 = self.ptaper(length=dx, width1=width1, width2=width2, arrow=arrow).put(0)
                 ICcell.Rmin = 0
             else:
                 e1 = self.cobra(xya, width1=width1, width2=width2, radius1=radius1,
