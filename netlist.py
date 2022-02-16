@@ -24,6 +24,7 @@ Nazca classes to construct Nodes, Pointers and Cells,
 and from those the graphs/netlists of the design.
 """
 
+from msilib.schema import Font
 import os
 from itertools import count
 from collections import defaultdict, OrderedDict, namedtuple
@@ -4353,7 +4354,7 @@ def whereami(text='here', size=100, pin=None):
     points = [(x*size,y*size) for x, y in points]
     with Cell('I am'.format(wherecnt)) as crisis:
         Polygon(layer=layer, points=points).put(0)
-        text(text+' ', height=size/4, align='rc', layer=layer).put(0)
+        font.text(text+' ', height=size/4, align='rc', layer=layer).put(0)
 
     crisis.put(pin)
     cfg.cp = cp_store
