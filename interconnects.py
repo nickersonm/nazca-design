@@ -2347,7 +2347,7 @@ For more information, check the documentation of 'cobra_p2p'.
         name=None,
         arrow=True,
     ):
-        """Create a symmetric Euler bend with no curacture at the start and minimum curvature radius.
+        """Create a symmetric Euler bend with no curvature at the start and minimum curvature radius.
         """
         halfeuler = self.euler(
             pin=pin,

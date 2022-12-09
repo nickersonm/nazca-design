@@ -333,9 +333,9 @@ def add_XSdict(name, name_foundry=None, origin='add_xsection', stub=None, descri
         }
 
         if cfg.xsection_table.empty:
-            cfg.xsection_table = cfg.xsection_table.append(D, ignore_index=True)
+            cfg.xsection_table = pd.concat([cfg.xsection_table, pd.DataFrame(D, index=[0])], axis=0, ignore_index=True)
         elif cfg.xsection_table[cfg.xsection_table['xsection'] == name].empty:
-            cfg.xsection_table = cfg.xsection_table.append(D, ignore_index=True)
+            cfg.xsection_table = pd.concat([cfg.xsection_table, pd.DataFrame(D, index=[0])], axis=0, ignore_index=True)
 
         #update mask_layers:
         merge_xsection_layers_with_layers()
@@ -487,7 +487,7 @@ def add_layer2xsection(xsection='name', layer=None,
         'polyline': polyline,
         'source': 'add_layer'
     }
-    cfg.xsection_layer_map = cfg.xsection_layer_map.append(D, ignore_index=True)
+    cfg.xsection_layer_map = pd.concat([cfg.xsection_layer_map, pd.DataFrame(D, index=[0])], axis=0, ignore_index=True)
 
     merge_xsection_layers_with_layers()
     return cfg.XSdict[xsection]
