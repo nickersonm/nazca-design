@@ -159,8 +159,8 @@ def polygon_split(s0, s1, p):
     # To prevent modifying the original polygon, we first make a copy.
     p = p[:]
     # Ensure it is closed.
-    if p[0] != p[-1]:
-        p.append(p[0])
+    if any(p[0] != p[-1]):
+        p = nd.np.vstack((p, p[0]))
     if nd.clipper.signed_area(p) > 0:  # Clockwise
         p.reverse()
 
@@ -179,7 +179,7 @@ def polygon_split(s0, s1, p):
         if type in {1, 3, 4}:
             index_on_line.append(i)
         elif type == 6:
-            p.insert(i + 1, points[0])
+            p = nd.np.insert(p, i + 1, points[0], axis=0)
             l += 1
         i += 1
 
