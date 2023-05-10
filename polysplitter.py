@@ -159,8 +159,12 @@ def polygon_split(s0, s1, p):
     # To prevent modifying the original polygon, we first make a copy.
     p = p[:]
     # Ensure it is closed.
-    if any(p[0] != p[-1]):
-        p = nd.np.vstack((p, p[0]))
+    if isinstance(p[0], tuple):
+        p = [list(e) for e in p]
+    if isinstance(p[0], nd.np.ndarray):
+        p = [e.tolist() for e in p]
+    if any([p[0] != p[-1]]):
+        p.append(p[0])
     if nd.clipper.signed_area(p) > 0:  # Clockwise
         p.reverse()
 
