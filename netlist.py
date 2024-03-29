@@ -24,7 +24,7 @@ Nazca classes to construct Nodes, Pointers and Cells,
 and from those the graphs/netlists of the design.
 """
 
-from msilib.schema import Font
+# from msilib.schema import Font
 import os
 from itertools import count
 from collections import defaultdict, OrderedDict, namedtuple
