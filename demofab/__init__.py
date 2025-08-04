@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-#-----------------------------------------------------------------------
+# -----------------------------------------------------------------------
 # This file is part of Nazca.
 #
 # Nazca is free software: you can redistribute it and/or modify
@@ -15,11 +15,11 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with Nazca.  If not, see <http://www.gnu.org/licenses/>.
-#-----------------------------------------------------------------------
+# -----------------------------------------------------------------------
 #
-#@Authors: Katarzyna Lawniczuk, Ronald Broeke
-#@email: nazca@brightphotonics.eu
-#2017(c)
+# @Authors: Katarzyna Lawniczuk, Ronald Broeke
+# @email: nazca@brightphotonics.eu
+# 2017(c)
 
 """
 DEMO PDK initialization.
@@ -39,3 +39,4 @@ from nazca.demofab.pdk_15_xsections import *
 from nazca.demofab.pdk_20_technology import *
 from nazca.demofab.pdk_30_BB_library import *
 from nazca.demofab.pdk_40_project_templates import *
+from nazca import __version__

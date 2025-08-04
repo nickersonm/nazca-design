@@ -39,7 +39,7 @@ def Tp_PhotoDetector(
     Returns:
         function that generates a Cell object
     """
-    @bbu.hashme(name, 'length')
+    @bbu.hashme(name, ['length'])
     def cell(length=length):
         """Create a PhotoDetector cell.
 

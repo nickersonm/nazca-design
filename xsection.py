@@ -1,4 +1,4 @@
-#-----------------------------------------------------------------------
+# -----------------------------------------------------------------------
 # This file is part of Nazca.
 #
 # Nazca is free software: you can redistribute it and/or modify
@@ -16,7 +16,7 @@
 #
 # @author: Ronald Broeke (c) 2016-2017
 # @email: ronald.broeke@brightphotonics.eu
-#-----------------------------------------------------------------------
+# -----------------------------------------------------------------------
 
 
 """Module defining xsection (cross section) functionality.
@@ -24,44 +24,33 @@
 This includes the Material class.
 """
 
-
 from itertools import count
 import warnings
-
-from functools import partial
-import inspect
 import numpy as np
 import pandas as pd
 from scipy import interpolate
-
 # for 2D plots
 from matplotlib.collections import PolyCollection
 # for 3D plots
 import mpl_toolkits.mplot3d as a3
 import matplotlib.colors as colors
 import matplotlib.pyplot as plt
-
 import nazca as nd
 from nazca.simglobal import sim
 from nazca import cfg
-from nazca.solver_multilayerc import MultiLayerSlabSolverC
-
-
-default_solverclass = MultiLayerSlabSolverC
 
 
 nazca_folder = nd.__path__[0]
 data_folder = nazca_folder + "/index_data"
 
 
-class Material_util():
+class Material_util:
     """Class with utilities to define the effective index on material data.
     """
 
-    def __init__():
+    def __init__(self):
         # TODO: calss must have init and selfin methods!
         pass
-
 
     def wl_check(self, wl, wlmin, wlmax, name):
         """Check if wavelength (wl) is in the allowed domain.
@@ -83,8 +72,6 @@ class Material_util():
             nd.main_logger(msg, 'warning')
         return True
 
-
-
     # TODO: not clear what the relation is between spline and data_spline
     def spline(self, wl, name, dat):
         """Generate an interpolated effective index based on material data.
@@ -105,7 +92,6 @@ class Material_util():
         if Material_util.wl_check(self, wl, wlmin, wlmax, name):
             Ipl = interpolate.CubicSpline(dat["wl"], dat["n"])
             return Ipl
-
 
     def data_spline(self, wl, name, n_type="real"):
         """Returns the effective index based on material model <name>.
@@ -144,14 +130,13 @@ class Material_util():
                 # Since this takes a long time, it is advised only if a complex
                 # value for Neff is needed.
                 comp_dat = [
-                    float(data['n'][m])+float(data['n'][row+1+m])*1j for m in range(row)
-                    ]
+                    float(data['n'][m]) + float(data['n'][row + 1 + m]) * 1j for m in range(row)
+                ]
                 new_dat['n'] = comp_dat
             return Material_util.spline(self, wl=wl, name=name, dat=new_dat)(wl)
 
 
-
-class Material():
+class Material:
     """Define a material.
 
     The material can be a physical material or a virtual material.
@@ -187,14 +172,12 @@ class Material():
         else:
             self._Neff = Nmat
 
-
     def Nmat(self, **kwargs):
         """
         Returns:
             float: materials its refractive index
         """
         return self.Neff(**kwargs)
-
 
     def Neff(self, **kwargs):
         """Get the index of the material.
@@ -213,8 +196,8 @@ class Material():
                 self._Neff = Material_util.data_spline(self, wl=self.wl, name=self.name)
             except FileNotFoundError:
                 raise Exception(
-                    f"No effective index (Nmat) given for material {self.name}.\n"\
-                    f"If index data should be used, check if '{self.name}.csv' is present\n"\
+                    f"No effective index (Nmat) given for material {self.name}.\n" \
+                    f"If index data should be used, check if '{self.name}.csv' is present\n" \
                     "in the {data_folder} directory."
                 )
             return self._Neff
@@ -231,7 +214,7 @@ class Material():
         self.rgb = rgb
 
 
-class Stack():
+class Stack:
     """Class to define layer stacks.
 
     A Stack is a list of layers as [(material, width), ...], bottom up with
@@ -246,13 +229,13 @@ class Stack():
     _ids = count(0)  # stack id
 
     def __init__(
-        self,
-        layers=None,
-        etchdepth=0,
-        background=None,
-        name='',
-        solver=None,
-        view='topview',
+            self,
+            layers=None,
+            etchdepth=0,
+            background=None,
+            name='',
+            solver=None,
+            view='topview',
     ):
         """Initialize a stack object.
 
@@ -266,7 +249,6 @@ class Stack():
         self.id = next(self._ids)
         self.background = background
         self.set(layers, etchdepth, solver, name, view)
-
 
     def simplifylayers(self, layers):
         """Merge neighbouring layers with the same material.
@@ -282,9 +264,8 @@ class Stack():
             else:
                 mat.append(m)
                 width.append(w)
-        #print (mat, width)
+        # print (mat, width)
         return list(zip(mat, width))
-
 
     def applyetch(self, layers, etchdepth=0):
         """Apply etch to the layer stack.
@@ -305,31 +286,30 @@ class Stack():
         mat, width = map(list, zip(*layers))
         stack = reversed(width)
         drop = 0
-        n = len(width)-1
+        n = len(width) - 1
         for i, w in enumerate(stack):
-            #print (i, w, etchdepth)
+            # print (i, w, etchdepth)
             if w > etchdepth:
-                width[n-i] = w-etchdepth
+                width[n - i] = w - etchdepth
                 break
             else:
                 drop += 1
                 etchdepth -= w
-        if drop > 0 :
+        if drop > 0:
             width = width[:-drop]
             mat = mat[:-drop]
-        if etchdepth > 0: # fill etch with background
+        if etchdepth > 0:  # fill etch with background
             width.append(etchdepth)
             mat.append(self.background)
         return list(zip(mat, width))
 
-
     def set(
-        self,
-        layers=None,
-        etchdepth=0,
-        name=None,
-        solver=None,
-        view='',
+            self,
+            layers=None,
+            etchdepth=0,
+            name=None,
+            solver=None,
+            view='',
     ):
         """Set the layer stack parameters.
 
@@ -358,21 +338,17 @@ class Stack():
         else:
             self.name = name
 
-
     def reset(self):
         self._ids = count(0)
 
-
     def count(self):
         return self._ids
-
 
     def __str__(self):
         output = "name: '{}'\n".format(self.name)
         for mat, width in self.layers[::-1]:
             output += '  {}\t{:.3f}\n'.format(mat.name, width)
         return output
-
 
     def Neff(self, wl=None, pol=None, mode=None):
         """Add Neff to the stack to act like a virtual material."""
@@ -391,8 +367,7 @@ class Stack():
             nd.main_logger("Solver type not recognized {solver}.", "error")
 
 
-
-class Xsection():
+class Xsection:
     """Define a cross sectional waveguide structure (XS).
 
     A structure refers to a type of optical waveguide or metal line.
@@ -427,34 +402,36 @@ class Xsection():
             layers ():
             name (str): xsection name
         """
-        #waveguide simulation properties
+        # waveguide simulation properties
         self.vstack = []
         self.hstack = []
         self.name = name
         self._stack_ids = count(0)
-        self.layers = layers #epi
+        self.layers = layers  # epi
         self.background = background
 
         # waveguiding layout properties:
-        self.os = 0 # straight-bend offset
-        self.width = None # waveguide-width
-        self.radius = None # radius of curvature
-        self.minimum_radius = None # minimum radius in um
-        self.mask_layers = pd.DataFrame() # for storing mask layer information
-        self.symmetry = True # if waveguide in the xs are asymmetric
-        self.pinstyle = None # visualistion of the xs pin in a layout
-        self.origin = origin # origin of the Xsection for documentation
-        self.description = description # description of the Xsection for documentation
-
+        self.os = 0  # straight-bend offset
+        self.width = None  # waveguide-width
+        self.radius = None  # radius of curvature, euler calibration radius
+        self.angle = None  # Default angle, euler calibartion angle
+        self.minimum_radius = None  # minimum radius in um
+        self.mask_layers = pd.DataFrame()  # for storing mask layer information
+        self.symmetry = True  # if waveguide in the xs are asymmetric
+        self.pinstyle = None  # visualistion of the xs pin in a layout
+        self.origin = origin  # origin of the Xsection for documentation
+        self.description = description  # description of the Xsection for documentation
 
     def background(self, mat):
         """Set the background material of the xsection.
+
+        Args:
+            mat (Material): The background material.
 
         Returns:
             None
         """
         self.background = mat
-
 
     def reset(self):
         """Empty the xsection structure vstack and hstack.
@@ -465,14 +442,12 @@ class Xsection():
         self.vstack = []
         self.hstack = []
 
-
     def stack_iter(self):
         """Returns:
             Interator over the stacks
         """
         for stack in self.stack:
             yield stack
-
 
     def levelhstack(self):
         """Make all vertical layers the same height.
@@ -497,17 +472,16 @@ class Xsection():
                         )
                     else:
                         vmat.layers[:-1].append(
-                            (self.background, maxwidth - vmat.layers.sumwidth)
+                            (self.background, maxvwidth - vmat.layers.sumwidth)
                         )
         # TODO: reset the solver vstacks
 
-
     def add_vstack(
-        self,
-        layers=None,
-        etchdepth=0,
-        name='',
-        solver=None,
+            self,
+            layers=None,
+            etchdepth=0,
+            name='',
+            solver=None,
     ):
         """Add a 'sideview' layer stack to the xsection.
 
@@ -515,22 +489,21 @@ class Xsection():
             layers (list): list of tuples (material, thickness)
             etchdepth (float): etchdepth into the stack measure from the top layer
             name (str): name of the stack
-            function (function): index function of the stack returning a float
             solver (class): slab solver class to use for the stack
 
         Returns:
             Stack: object describing stack layers
         """
-        #materials, widths = zip(*layers)
+        # materials, widths = zip(*layers)
         if layers is None:
-           layers = self.layers
+            layers = self.layers
 
-        #TODO: check is name already exists.
+        # TODO: check is name already exists.
         vstack = Stack(
-            layers = layers,
-            etchdepth = etchdepth,
-            background = self.background,
-            name = name,
+            layers=layers,
+            etchdepth=etchdepth,
+            background=self.background,
+            name=name,
             view='sideview',
             solver=solver,
         )
@@ -538,13 +511,12 @@ class Xsection():
         vstack_id = len(self.vstack)
         return vstack
 
-
     def add_hstack(
-        self,
-        layers,
-        name='',
-        function=None,
-        solver=None,
+            self,
+            layers,
+            name='',
+            function=None,
+            solver=None,
     ):
         """Define the hstack of the xsection.
 
@@ -571,11 +543,11 @@ class Xsection():
         self.levelhstack()
         return self.hstack
 
-
     def Neff(self, wl=sim.wl, pol=sim.pol, radius=0.0, **kwargs):
         """Return the effective index of the xsection.
 
         Args:
+
             wl (float): Wavelength in um.
             pol (int): Polarization. 0 for "TE" or 1 for "TM".
             radius (float): Bending radius at the center of the waveguide.
@@ -589,7 +561,6 @@ class Xsection():
             radius = R
         return self.solver.Neff(wl=wl, pol=pol, radius=radius, **kwargs)
 
-
     def maxNeff(self):
         """Obtain maximum refractive index of all material in the xsection.
 
@@ -599,11 +570,10 @@ class Xsection():
         Neffs = []
         stack_ids = [a.id for a in self.hstack['vstacks']]
         for v in self.stack:
-             if v.id in stack_ids:
-                 for mat in v.materials:
-                     Neffs.append(mat.Neff(R=sim.R, wl=sim.wl))
+            if v.id in stack_ids:
+                for mat in v.materials:
+                    Neffs.append(mat.Neff(R=sim.R, wl=sim.wl))
         return max(Neffs)
-
 
     def minNeff(self):
         """Obtain minimum refractive index of all material in the xsection.
@@ -614,14 +584,12 @@ class Xsection():
         Neffs = []
         stack_ids = [a.id for a in self.hstack['vstacks']]
         for v in self.stack:
-             if v.id in stack_ids:
-                 for mat in v.materials:
-                     Neffs.append(mat.Neff(R=sim.R, wl=sim.wl))
+            if v.id in stack_ids:
+                for mat in v.materials:
+                    Neffs.append(mat.Neff(R=sim.R, wl=sim.wl))
         return min(Neffs)
 
-
-    #def __str__(self):
-
+    # def __str__(self):
 
     def info(self):
         """Create a string with information on the xsection.
@@ -641,14 +609,14 @@ class Xsection():
                 info += '  {}\t{:.3f}\n'.format(mat.name, w)
         else:
             return None
-            #warnings.warn("No layers defined for xsection '{}':".\
+            # warnings.warn("No layers defined for xsection '{}':".\
             #    format(self.name), stacklevel=2)
 
         if self.hstack:
             info += '\n* hstack:\n'
             for i, (vstack, w) in enumerate(zip(self.hstack['vstacks'], self.hstack['widths'])):
                 info += "'{}'({:.2f})".format(vstack.name, w)
-                if i < len(self.hstack['vstacks'])-1:
+                if i < len(self.hstack['vstacks']) - 1:
                     info += ' | '
             info += '\n'
             stack_ids = [a.id for a in self.hstack['vstacks']]
@@ -656,7 +624,6 @@ class Xsection():
             info += 'No hstacks defined yet. Use add_hstack().\n'
 
         return info
-
 
     # @property
     # def index(self):
@@ -676,7 +643,6 @@ class Xsection():
     #     # self.Neff = partial(self._IM.Neff, width=self.width)
     #     return self._IM
 
-
     def showGuide2D(self, draw_index=False, ax=None):
         """Display a 2D representation of xsection.
 
@@ -686,7 +652,8 @@ class Xsection():
 
         no_stack_defined = not self.hstack
         if no_stack_defined:
-            warnings.warn("Warning: No layerstack defined to 2D draw xsection '{}'.\n Use help(nazca.Xsection) for options".\
+            warnings.warn(
+                "Warning: No layerstack defined to 2D draw xsection '{}'.\n Use help(nazca.Xsection) for options". \
                 format(self.name), stacklevel=2)
             return None
 
@@ -702,41 +669,40 @@ class Xsection():
         w = self.hstack['widths']
         vertex = []
         colors = []
-        for i, (width,stack) in enumerate(zip(self.hstack['widths'],self.hstack['vstacks'])):
+        for i, (width, stack) in enumerate(zip(self.hstack['widths'], self.hstack['vstacks'])):
             y0 = 0
             for j, (h, mat) in enumerate(zip(stack.widths, stack.materials)):
-                #print (t, thick, mat)
+                # print (t, thick, mat)
                 if draw_index:
-                     intens = (mat.Neff()-self.minNeff()) / (self.maxNeff()-self.minNeff())
-                     col = (intens, intens, intens)
-                     #if col==(0,0,0): #do not draw white materials (air)
-                     #     break
+                    intens = (mat.Neff() - self.minNeff()) / (self.maxNeff() - self.minNeff())
+                    col = (intens, intens, intens)
+                    # if col==(0,0,0): #do not draw white materials (air)
+                    #     break
                 else:
                     col = stack.materials[j].rgb
-                    #if col==(1,1,1): #do not draw white materials (air)
+                    # if col==(1,1,1): #do not draw white materials (air)
                     #     break
 
-                y1 = y0+h
-                x1 = x0+w[i]
+                y1 = y0 + h
+                x1 = x0 + w[i]
                 x = np.array([x0, x1, x1, x0])
                 y = np.array([y0, y0, y1, y1])
-                vertex.append(np.swapaxes([x,y], 0, 1))
+                vertex.append(np.swapaxes([x, y], 0, 1))
                 colors.append(col)
                 y0 = y1
                 ymax.append(y0)
             x0 += width
         coll = PolyCollection(vertex, facecolors=colors, edgecolors='none')
         ax.add_collection(coll)
-        #ax.autoscale_view()
-        ax.set_xlim([0,x0])
-        ax.set_ylim([0,max(ymax)])
+        # ax.autoscale_view()
+        ax.set_xlim([0, x0])
+        ax.set_ylim([0, max(ymax)])
         ax.set_xlabel('x [um]')
         ax.set_ylabel('y [um]')
         ax.set_title(self.name)
-        #fig.colorbar(coll, ax=ax)
+        # fig.colorbar(coll, ax=ax)
         if plotHere:
             plt.show()
-
 
     def showGuide3D(self, draw_index=False):
         """Display a 2D representation of xsection.
@@ -754,57 +720,59 @@ class Xsection():
         z0 = 1.0
         x0 = 0.0
         ymax = []
-        #w = [1.0] + self.hstack['widths'] + [1.0]
+        # w = [1.0] + self.hstack['widths'] + [1.0]
         try:
             w = self.hstack['widths']
         except:
-            print("Warning: No layerstack defined to 3D draw xsection '{}'. Use 'help(nazca.Xsection)' for options.".format(self.name))
+            print(
+                "Warning: No layerstack defined to 3D draw xsection '{}'. Use 'help(nazca.Xsection)' for options.".format(
+                    self.name))
             return None
         for i, (width, stack) in enumerate(zip(self.hstack['widths'], self.hstack['vstacks'])):
             y0 = 0
             for j, (h, mat) in enumerate(zip(stack.widths, stack.materials)):
                 if draw_index:
-                    intens = (mat.Neff() - self._minNeff()) / (self._maxNeff()-self._minNeff())
+                    intens = (mat.Neff() - self._minNeff()) / (self._maxNeff() - self._minNeff())
                     col = (intens, intens, intens)
-                    if col==(0, 0, 0):  # do not draw black materials
+                    if col == (0, 0, 0):  # do not draw black materials
                         break
                 else:
                     col = stack.materials[j].rgb
-                    if col==(1, 1, 1):  # do not draw white materials (air)
+                    if col == (1, 1, 1):  # do not draw white materials (air)
                         break
                 vertex = []
-                y1 = y0+h
-                x1 = x0+w[i]
-                #front
+                y1 = y0 + h
+                x1 = x0 + w[i]
+                # front
                 x = [x0, x1, x1, x0]
-                y = [0,  0,  0,  0]
+                y = [0, 0, 0, 0]
                 z = [y0, y0, y1, y1]
-                vertex.append(list(zip(x,y,z)))
-                #back
+                vertex.append(list(zip(x, y, z)))
+                # back
                 x = [x0, x1, x1, x0]
                 y = [z0, z0, z0, z0]
                 z = [y0, y0, y1, y1]
-                #right
-                vertex.append(list(zip(x,y,z)))
+                # right
+                vertex.append(list(zip(x, y, z)))
                 x = [x1, x1, x1, x1]
-                y = [z0,  0,  0,  z0]
+                y = [z0, 0, 0, z0]
                 z = [y0, y0, y1, y1]
-                #left
-                vertex.append(list(zip(x,y,z)))
+                # left
+                vertex.append(list(zip(x, y, z)))
                 x = [x0, x0, x0, x0]
-                y = [z0,  0,  0, z0]
+                y = [z0, 0, 0, z0]
                 z = [y0, y0, y1, y1]
-                vertex.append(list(zip(x,y,z)))
-                #top
+                vertex.append(list(zip(x, y, z)))
+                # top
                 x = [x0, x1, x1, x0]
-                y = [z0,  z0,  0,  0]
+                y = [z0, z0, 0, 0]
                 z = [y1, y1, y1, y1]
-                vertex.append(list(zip(x,y,z)))
-                #bot
+                vertex.append(list(zip(x, y, z)))
+                # bot
                 x = [x0, x1, x1, x0]
-                y = [z0,  z0,  0,  0]
+                y = [z0, z0, 0, 0]
                 z = [y0, y0, y0, y0]
-                vertex.append(list(zip(x,y,z)))
+                vertex.append(list(zip(x, y, z)))
 
                 y0 = y1
                 ymax.append(y0)
@@ -813,11 +781,12 @@ class Xsection():
                 q.set_edgecolor('k')
                 ax.add_collection3d(q)
             x0 += width
-        ax.set_xlim([0,x0])
-        ax.set_ylim([0,z0])
-        ax.set_zlim([0,max(ymax)])
-        print (x0, z0, max(ymax))
+        ax.set_xlim([0, x0])
+        ax.set_ylim([0, z0])
+        ax.set_zlim([0, max(ymax)])
+        print(x0, z0, max(ymax))
         plt.show()
+
 
 # end class Xsection
 
@@ -833,11 +802,11 @@ def modalplot(buildXS, width, modes=None):
             XS = buildXS(w)
             XS.solver.mode = m
             n = XS.solver.Neff()
-            if n<=0:
+            if n <= 0:
                 n = np.nan
             N.append(n)
         N2.append(N)
-    #return N2
+    # return N2
     for i, n in enumerate(N2):
         plt.plot(w, n, '-')
     plt.xlabel('width [um]')
@@ -862,7 +831,7 @@ def modaldata(XSfunc, width, modes=None):
         modes = XS.solver.maxModes
     for m in range(modes):
         N = []
-        names.append('mode'+ str(m))
+        names.append('mode' + str(m))
         for w in width:
             XS = XSfunc(w)
             XS.solver.mode = m
@@ -871,11 +840,11 @@ def modaldata(XSfunc, width, modes=None):
                 n = np.nan
             N.append(n)
         N2.append(N)
-        df = pd.DataFrame(np.array(N2).T, columns = names)
+        df = pd.DataFrame(np.array(N2).T, columns=names)
     return df
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     """
     TODO:
     Example code (Xsection):
@@ -885,7 +854,6 @@ if __name__=="__main__":
     """
     from nazca.demofab import pdk_10_materials as mat
     from nazca.demofab.pdk_15_xsections import xsShallow
-
 
     # Define a wavelength range on which to study the xsection
     wl_range = np.linspace(1.3, 1.6, 11)
@@ -899,7 +867,7 @@ if __name__=="__main__":
     # Determine Neff (TE) for all defined wavelengths
     for n, wl in enumerate(wl_range):
         if n % 10 == 0:
-            print(f"Step {n}/{len(wl_range)-1}")
+            print(f"Step {n}/{len(wl_range) - 1}")
         sh_te_Neff.append(xsShallow.Neff(wl=wl, pol=0))
         bg_Neff.append(xsShallow.stack[0].Neff(wl=wl, pol=0))
         rid_Neff.append(xsShallow.stack[1].Neff(wl=wl, pol=0))

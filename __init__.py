@@ -29,8 +29,15 @@
 #    'textheight', '__version__', 'modulepath']
 
 import pandas as pd
+from importlib.metadata import version, PackageNotFoundError
 
-from .version import __version__
+try:
+    __version__ = version("nazca")
+except PackageNotFoundError:
+    # Not an installed nazca package, but a git source tree
+    from .version import get_version
+    __version__ = get_version()
+
 from . import cfg
 from .simglobal import sim
 #from .slabmode import *
@@ -64,11 +71,16 @@ from .angle_drc import *
 
 from .pdk_template import *
 from .polysplitter import *
+from .pinline import *
+
+
+from .gensolver import *
 
 # solvers
-from .solver_slab2020 import *
-from .solver_multilayerc import *
+import nazca.solvers as solvers
+from .solvers import solver_slab2020
 
+from . import xsection_geometry
 
 
 # Nazca module path

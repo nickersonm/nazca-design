@@ -3,564 +3,1612 @@
 """
 Pathfinder functionality to trace a netlist through a layout.
 
-@authors: Ronald Broeke, based on summer project by Stefan van Ieperen.
+@authors: Jerom Baas, Ronald Broeke, based on summer project by Stefan van Ieperen.
 
-Copyright (c) 2019-2020 Bright Photonics B.V.
+Copyright (c) 2019-2022 Bright Photonics B.V.
 """
+from typing import Any, List, Optional, Dict
+from copy import copy
+from dataclasses import dataclass
 
-import sys
+# TODO look into making find_optical connections more readable
+
 import nazca as nd
-from nazca import cfg
+from nazca.util import ProtectedPartial, filter_eval
 
-count = 0  # counter stores indentation level during tracing
-path = 0  # path counter used as key in the paths dictionary
 
-def nb_filter_geo(start):
-    """Yield all neighbouring nodes except for the origin, stubs and annotations.
+@dataclass
+class Segment:
+    """Class for storing the info a single path segment"""
 
-    Iterates over the neighbours in the Cell.
+    pin_in: nd.Node
+    pin_out: nd.Node
+    connection: Any
+    position_in: Any
+    position_out: Any
+    upper_pin_in: Optional[nd.Node] = None
+    upper_pin_out: Optional[nd.Node] = None
+    tracker_kwargs_in: Optional[Dict] = None
+    tracker_kwargs_out: Optional[Dict] = None
+
+
+class Logger:
+    """
+    Class for logging outputs of the pathfinder.
 
     Args:
-        start (Node): a Node from which you want the neighbours
-
-    Yields:
-        Node: iterator over start's filtered neighbours
+        filename (str): Name of the logfile to write to.
+        logging_level (int): Level of logging. At 0 no logfile is created. At 1 a logfile is created with different
+                            pins traversed. At 2, the act of moving up and down the hierarchy is also logged.
+        depth (int): Attribute used to manage indentations in the logging file that correspond to hierarchical depth.
+    Methods:
+        log(): Writes a different log message to the logfile depending on the status string provided.
     """
-    for start_nb, _ in start.nb_geo:
-        if not "org" in start_nb.name:
-            yield start_nb
+
+    def __init__(
+        self,
+        filename="trace.log",
+        logging_level=0,
+        depth=0,
+        trackertype='dis',
+    ):
+        self.filename = filename
+        self.logging_level = logging_level
+        self.depth = depth
+        self.trackertype = trackertype
+
+        if self.logging_level > 0:
+            self.logfile = open(filename, "w")
+        elif self.logging_level == -1:
+            self.logfile = open(filename, "w")
+
+    def log(
+        self,
+        pin,
+        status,
+        L=0,
+        instance_stack=None,
+        endpoint=None,
+        connected_pins=None,
+        paths_dict=None,
+    ):
+        """
+        Outputs message to logging file if logging_level > 0. Outputs more detailed message if logging level > 1.
+        The message depends on the status passed to the log function.
+        Possible statuses:
+            logging level 1:
+                'start'
+                'optical_connection'
+                'pin_connection'
+                'loop'
+                'end_of_path'
+                'end_of_path_splitting_node'
+                'endpoint'
+                'backtracking'
+                'backtracked'
+                'end_of_tracking'
+            logging level 2:
+                'drill_down'
+                'drill_up'
+                'no_pin_connection'
+                'no_optical_connection'
+                'reverse'
+        Args:
+            pin (node): current pin at the time of logging.
+            status (str): string that determines what kind of message is logged.
+            L (float): length of optical connection found. Used only if status is 'optical_connection'.
+            instance_stack (list): Instance stack of instances traversed. Used for hierarchy in backtracking.
+            endpoint (nd.Pin, nd.Cell or nd.Instance): Used for status 'endpoint', to specify which specific
+                                                        user-provided endpoint was reached.
+            connected_pins (list): List of connected pins. This is used to output the list of connections when status is
+                                   'end_of_path_splitting_node' so that debugging is easier.
+            paths_dict (dict): dictionary of final paths
+        """
+        if self.logging_level > 0:
+            if status == "start":
+                self.depth = 0
+                self.logfile.write(f"Start of tracking paths...\n")
+                self.depth = 1
+                try:
+                    # check if pin has an instance
+                    pin.cnode.instance.name
+                    # if pin has an instance, slightly change output message
+                    self.logfile.write(
+                        f"{self.depth * '  '}Starting path tracking at pin '{pin.name}' in instance of "
+                        f"cell '{pin.cnode.cell.cell_name}'.\n"
+                    )
+                except:
+                    self.logfile.write(
+                        f"{self.depth*'  '}Starting path tracking at pin '{pin.name}' in cell "
+                        f"'{pin.cnode.cell.cell_name}'.\n"
+                    )
+            elif status == "optical_connection":
+                try:
+                    # check if pin has an instance
+                    pin.cnode.instance.name
+                    # if pin has an instance, slightly change output message
+                    self.logfile.write(
+                        f"{self.depth * '  '}Found optical connection to pin '{pin.name}' in instance "
+                        f"of cell '{pin.cnode.cell.cell_name}' with length {L}.\n"
+                    )
+                    if self.logging_level > 1:
+                        self.logfile.write(
+                            f"{self.depth * '  '}------------------------------------------------------"
+                            f"-----------------\n"
+                        )
+                        self.logfile.write(
+                            f"{self.depth * '  '}Looking for pin connections to pin '{pin.name}' "
+                            f"in instance of cell '{pin.cnode.cell.cell_name}'...\n"
+                        )
+                except:
+                    self.logfile.write(
+                        f"{self.depth*'  '}Found optical connection to pin '{pin.name}' in cell "
+                        f"'{pin.cnode.cell.cell_name}' with length {L}.\n"
+                    )
+                    if self.logging_level > 1:
+                        self.logfile.write(
+                            f"{self.depth * '  '}------------------------------------------------------"
+                            f"-----------------\n"
+                        )
+                        self.logfile.write(
+                            f"{self.depth * '  '}Looking for pin connections to pin '{pin.name}' in "
+                            f"cell '{pin.cnode.cell.cell_name}'...\n"
+                        )
+            elif status == "pin_connection":
+                try:
+                    # check if pin has an instance
+                    pin.cnode.instance.name
+                    # if pin has an instance, slightly change output message
+                    self.logfile.write(
+                        f"{self.depth*'  '}Found pin-pin connection to pin '{pin.name}' in instance of "
+                        f"cell '{pin.cnode.cell.cell_name}'.\n"
+                    )
+                    if self.logging_level > 1:
+                        self.logfile.write(
+                            f"{self.depth * '  '}------------------------------------------------------"
+                            f"-----------------\n"
+                        )
+                        self.logfile.write(
+                            f"{self.depth * '  '}Looking for optical connections to pin '{pin.name}' "
+                            f"in instance of cell '{pin.cnode.cell.cell_name}'...\n"
+                        )
+                except:
+                    self.logfile.write(
+                        f"{self.depth * '  '}Found pin-pin connection to pin '{pin.name}' in cell "
+                        f"'{pin.cnode.cell.cell_name}'.\n"
+                    )
+                    if self.logging_level > 1:
+                        self.logfile.write(
+                            f"{self.depth * '  '}------------------------------------------------------"
+                            f"-----------------\n"
+                        )
+                        self.logfile.write(
+                            f"{self.depth * '  '}Looking for optical connections to pin '{pin.name}' "
+                            f"in cell '{pin.cnode.cell.cell_name}'...\n"
+                        )
+            elif status == "loop":
+                self.depth = 1
+                try:
+                    # check if pin has an instance
+                    pin.cnode.instance.name
+                    # if pin has an instance, slightly change output message
+                    self.logfile.write(
+                        f"{self.depth * '  '}Detected loop at pin '{pin.name}' in instance of cell "
+                        f"'{pin.cnode.cell.cell_name}'.\n\n"
+                    )
+                except:
+                    self.logfile.write(
+                        f"{self.depth*'  '}Detected loop at pin '{pin.name}' in cell "
+                        f"'{pin.cnode.cell.cell_name}'.\n\n"
+                    )
+            elif status == "end_of_path":
+                self.depth = 1
+                try:
+                    # check if pin has an instance
+                    pin.cnode.instance.name
+                    # if pin has an instance, slightly change output message
+                    self.logfile.write(
+                        f"{self.depth * '  '}Reached end of path at pin '{pin.name}' in instance of "
+                        f"cell '{pin.cnode.cell.cell_name}'.\n\n"
+                    )
+                except:
+                    self.logfile.write(
+                        f"{self.depth*'  '}Reached end of path at pin '{pin.name}' in cell "
+                        f"'{pin.cnode.cell.cell_name}'.\n\n"
+                    )
+            elif status == "end_of_path_splitting_node":
+                self.depth = 1
+                try:
+                    # check if pin has an instance
+                    pin.cnode.instance.name
+                    # if pin has an instance, slightly change output message
+                    self.logfile.write(
+                        f"{self.depth * '  '}Splitting nodes: connections to:\n"
+                    )
+                    for connection in connected_pins:
+                        self.logfile.write(
+                            f"{self.depth * '  '}\t- {connection}\n"
+                        )
+                    self.logfile.write(
+                        f"{self.depth * '  '}Terminated path at pin '{pin.name}' in instance of "
+                        f"cell '{pin.cnode.cell.cell_name}'.\n\n"
+                    )
+                except:
+                    self.logfile.write(
+                        f"{self.depth * '  '}Splitting nodes: connections to:\n"
+                    )
+                    for connection in connected_pins:
+                        self.logfile.write(
+                            f"{self.depth * '  '}\t- {connection}\n"
+                        )
+                    self.logfile.write(
+                        f"{self.depth*'  '}Terminated path at pin '{pin.name}' in cell "
+                        f"'{pin.cnode.cell.cell_name}'.\n\n"
+                    )
+            elif status == "endpoint":
+                self.depth = 1
+                # figure out if endpoint is pin, cell or instance
+                if isinstance(endpoint, nd.Node):
+                    self.logfile.write(
+                        f"{self.depth * '  '}Reached endpoint: pin is endpoint pin.\n"
+                    )
+                    try:
+                        # check if pin has an instance
+                        endpoint.cnode.instance.name
+                        # if pin has an instance, slightly change output message
+                        self.logfile.write(
+                            f"{self.depth * '  '}Reached end of path at pin '{endpoint.name}' "
+                            f"in instance of cell '{endpoint.cnode.cell.cell_name}'.\n\n"
+                        )
+                    except:
+                        self.logfile.write(
+                            f"{self.depth * '  '}Reached end of path at pin '{endpoint.name}' in cell "
+                            f"'{endpoint.cnode.cell.cell_name}'.\n\n"
+                        )
+                elif isinstance(endpoint, nd.Cell):
+                    self.logfile.write(
+                        f"{self.depth * '  '}Reached endpoint: pin "
+                        f"in cell '{endpoint.cell_name}'.\n"
+                    )
+                    try:
+                        # check if pin has an instance
+                        pin.cnode.instance.name
+                        # if pin has an instance, slightly change output message
+                        self.logfile.write(
+                            f"{self.depth * '  '}Reached end of path at pin '{pin.name}' in instance of "
+                            f"cell '{pin.cnode.cell.cell_name}'.\n\n"
+                        )
+                    except:
+                        self.logfile.write(
+                            f"{self.depth * '  '}Reached end of path at pin '{pin.name}' in cell "
+                            f"'{pin.cnode.cell.cell_name}'.\n\n"
+                        )
+                elif isinstance(endpoint, nd.Instance):
+                    self.logfile.write(
+                        f"{self.depth * '  '}Reached endpoint: pin in {endpoint}.\n"
+                    )
+                    try:
+                        # check if pin has an instance
+                        pin.cnode.instance.name
+                        # if pin has an instance, slightly change output message
+                        self.logfile.write(
+                            f"{self.depth * '  '}Reached end of path at pin '{pin.name}' in instance of "
+                            f"cell '{pin.cnode.cell.cell_name}'.\n\n"
+                        )
+                    except:
+                        self.logfile.write(
+                            f"{self.depth * '  '}Reached end of path at pin '{pin.name}' in cell "
+                            f"'{pin.cnode.cell.cell_name}'.\n\n"
+                        )
+            elif status == "backtracking":
+                self.depth = 0
+                self.logfile.write(f"{self.depth*'  '}Backtracking...\n")
+            elif status == "backtracked":
+                if self.logging_level > 1:
+                    self.depth = len(instance_stack) + 1
+                else:
+                    self.depth = 1
+                self.logfile.write(
+                    f"{self.depth*'  '}Backtracked to pin '{pin.name}' in cell "
+                    f"'{pin.cnode.cell.cell_name}'.\n"
+                )
+            elif status == "end_of_tracking":
+                self.depth = 0
+                self.logfile.write(
+                    f"\n\nTracking done...\n\nFound {len(pin)} paths with the following endpins:\n"
+                )
+                for i, p in enumerate(pin):
+                    if len(paths_dict[i]) > 0:
+                        try:
+                            p.cnode.instance.name
+                            self.logfile.write(
+                                f"{i+1}. Pin {p.name} in instance of {p.cnode.cell.cell_name} at"
+                                f" {paths_dict[i][-1].position_out}.\n"
+                            )
+                        except:
+                            self.logfile.write(
+                                f"{i + 1}. Pin {p.name} in cell {p.cnode.cell.cell_name} at"
+                                f" {paths_dict[i][-1].position_out}.\n"
+                            )
+
+        if self.logging_level > 1:
+            if status == "drill_up":
+                self.depth -= 1
+                try:
+                    # check if pin has an instance
+                    pin.cnode.instance.name
+                    # if pin has an instance, slightly change output message
+                    self.logfile.write(
+                        f"{self.depth*'  '}Move up to pin '{pin.name}' in instance of "
+                        f"cell '{pin.cnode.cell.cell_name}'.\n"
+                    )
+                except:
+                    self.logfile.write(
+                        f"{self.depth * '  '}Move up to pin '{pin.name}' in cell "
+                        f"'{pin.cnode.cell.cell_name}'.\n"
+                    )
+            elif status == "drill_down":
+                self.depth += 1
+                try:
+                    # check if pin has an instance
+                    pin.cnode.instance.name
+                    # if pin has an instance, slightly change output message
+                    self.logfile.write(
+                        f"{self.depth * '  '}Move down to pin '{pin.name}' in instance of "
+                        f"cell '{pin.cnode.cell.cell_name}'.\n"
+                    )
+                except:
+                    self.logfile.write(
+                        f"{self.depth * '  '}Move down to pin '{pin.name}' in cell "
+                        f"'{pin.cnode.cell.cell_name}'.\n"
+                    )
+            elif status == "no_optical_connection":
+                self.logfile.write(
+                    f"{self.depth * '  '}No optical connection of type '{self.trackertype}' found...\n"
+                )
+            elif status == "no_pin_connection":
+                self.logfile.write(f"{self.depth * '  '}No connected pins found...\n")
+            elif status == "reverse":
+                self.logfile.write(f"{self.depth * '  '}Reversed tracking. Drilling down first...\n")
 
 
-flip = 1
-def find_optical_level(
-    start,
-    instance_stack=None,
-    log=False,
-    flip=1,
-    trackertype='dis',
-    end_cell_name='',
-):
-    """Drill down from a node in the cell hierarchy until a valid edge is found or max depth is reached.
-
-    This function finds if node <start> has an optical edge.
-    If not, it is checked if node is connected to an instance to, if so,
-    drill down into it.
-    When drilling down this function creates a "C2I_nodemap" attribute (cell2instance)
-    in every Instance it passes to find the way back up from a Cell to the Instance along
-    the celltree path it came from.
-
-    Args:
-        start (Node): a higher level Node from which you want to go down
-        log (bool): if True print all nodes passed with an indent proportional to the cell level depth.
-
-    Returns:
-        Node, Node, list, float:
-            cell_node (Node): start Node of an optical connection,
-            nb_opt (Node): end node of optical connection,
-            instance_stack (list): list of Instances traversed,
-            length (float): length (value) of the connection
+class Paths:
     """
-    global count, F
+    The Paths class creates an object that contains information on the different paths from a starting pin.
 
-    # keep track off / calculate absolute pin coordinates here
-    #    with respect to the highest cell (of the start node)
+    Attributes:
+        endpins (list): A list containing the endpins of the different paths.
+        segments (dict): A dictionary containing the raw output data from the pathfinder.
+        endpins_dict (dict): A dictionary containing the endpins and their positional information.
+        number_of_paths (float): The number of different paths found by the pathfinder.
+        startpin (node): The starting pin from which the paths were traced.
+        lengths (list): A list containing the lengths of the different paths.
 
-    if instance_stack is None:
-        instance_stack = []
+    Methods:
+        show_paths(): A function that visualizes the traced paths when the layout is exported to a gds.
+    """
 
-    if start.cnode.instance is not None:  # instance pin start
-        if log:
-            F.write(f"{count*'  '}pin '{start.name:10}' in inst '{start.cnode.instance.name:20}' I-{start.cnode.instance.id}\n")
-        current_pin = start
-        instance = start.cnode.instance
-        instance_stack.append(instance)
-        if instance.cnode.flip:
-            flip *= -1
-    else: # cell pin start
-        current_pin = start
+    def __init__(
+        self,
+        startpin,
+        endpoints=None,
+        logfilename="trace.log",
+        logging_level=0,
+        reverse=False,
+        allow_splitting_nodes=False,
+        trackertype="dis",
+        instance_stack=None,
+        tracker_kwargs=None,
+        show=False,
+        show_layer_number=2000,
+        show_width=7,
+    ):
+        """
+        Initializes the paths by finding the endpins and paths from a startpin using the _findpaths() function,
+        calculating their lengths and the number of paths.
 
-    #print(f"* start_pos: {start.fxya()}")
+        Args:
+            startpin (Node): Startpoint for the pathfinding algorithm.
+            logfilename (str): Name of the logfile.
+            endpoints (list): Optional List of pins, cells and/or instances where the pathfinder will terminate the paths
+            logging_level (int): Level of logging. At 0 no logfile is created. At 1 a logfile is created with
+                    different pins traversed. At 2, the act of moving up and down the hierarchy is also logged.
+            reverse (bool): If true, pathfinder will start tracking in the reverse direction. The default direction is
+                    to look for optical connections at the start. If reverse is true, the pathfinder will look for
+                    pin2pin connections first.
+            allow_splitting_nodes (bool): If true, the pathfinder will handle a splitting path in pin2pin connections.
+                    By default, this is false: If this happens, the pathfinder will terminate the path and raise an error
+            trackertype (str): Type of optical connections to look for.
+            instance_stack (list): Optional instance stack that a user can provide. This allows the pathfinder to break
+                    out of the starting level.
+            show (bool): Show path in the cell. default=False.
 
-    # drill down until a signal edge is found or the bottom is reached:
-    while True:
-        next_nodes_opt = []  # store signal connections.
+        Returns:
+            None
+        """
 
-        if current_pin.cnode.instance is not None:  # pin resides in an instance
-            instance.C2I_nodemap = {node.up:node for node in instance.pin.values()}  # Cell2Instance mapping for the instance nodes.
-            cell_node = current_pin.up  # go to corresponding cell node of current_pin before drilling down
-            if cell_node.cnode.cell.cell_name == end_cell_name:
-                if log:
-                    F.write(f"{count*'  '}END_CELL_NAME condition found on '{end_cell_name}' on pin '{cell_node.name:10}' in cell '{current_pin.cnode.cell.cell_name:20}' C-{current_pin.cnode.cell.id}\n")
-                break  # end of path, leave while loop.
-            if log:
-                F.write(f"{count*'  '}pin '{cell_node.name:10}' in cell '{current_pin.cnode.cell.cell_name:20}' C-{current_pin.cnode.cell.id}\n")
-        else:
-            cell_node = current_pin
+        if startpin is None:
+            msg = "You must specify a start pin to trace paths from."
+            raise RuntimeError(msg)
 
-        # Find (and store) all signal paths of cell_node, if any:
-        for nb, L, direction, sigtype, path in cell_node.path_nb_iter(sigtype=trackertype):
-            # find xya position of the optical nodes for visualisation
-            if nb is None:
-                x, y, a = 0, 0, 0  # termination
+        if tracker_kwargs is None:
+            tracker_kwargs = {}
+
+        # find the paths
+        endpins, paths_dict = self._findpaths(
+            startpin=startpin,
+            endpoints=endpoints,
+            logfilename=logfilename,
+            logging_level=logging_level,
+            reverse=reverse,
+            allow_splitting_nodes=allow_splitting_nodes,
+            trackertype=trackertype,
+            instance_stack=instance_stack,
+            tracker_kwargs=tracker_kwargs,
+        )
+
+        self.endpins = endpins
+        self.segments = paths_dict
+        self.endpins_dict = self._generate_endpins_dictionary(paths_dict, startpin, instance_stack)
+        #self.lengths = self._get_lengths(self.segments)
+        self.number_of_paths = len(self.segments)
+        self.startpin = startpin
+        self.pathlayers = set()  # keep track of layers added by pathfinder to allow pathfinder to reuse them.
+        if show:
+            self.show(layer_number=show_layer_number, width=show_width)
+
+
+    @staticmethod
+    def get_pin_coordinate_up_instance_stack(pin, instance_stack):
+        """Get the xy coordinates of the pin goin up the instance stack"""
+        flipstate = False
+        pointer = nd.Pointer(0, 0, 0)
+        for instance in instance_stack:
+            move = copy(instance.cnode.pointer)
+            if flipstate:
+                move.flip()
+            pointer.move_ptr(move)
+            flipstate = not flipstate if instance.cnode.flip else flipstate
+
+        move = copy(pin.pointer)
+        if flipstate:
+            move.flip()
+        pointer.move_ptr(move)
+
+        return pointer.xy()
+
+    def show_paths(
+        self,
+        layer_number=2000,
+        width=5.0,
+        paths2cell=None,
+    ):
+        """
+        Visualize paths in the layout via a polyline.
+
+        Args:
+            layer_number (int): layer number for path 1.
+            width (float): width of the lines drawn between the nodes of a path.
+            paths2cell (nd.Cell): Cell to which to add the paths. Default is the active cell.
+
+        Returns:
+            None
+        """
+
+        if paths2cell is not None:
+            nd.cfg.cells.append(paths2cell)
+            nd.cfg.patchcell = True
+
+        points_dict = {}
+        for i, segments in self.segments.items():
+            if len(segments) == 0:
+                points_dict[i] = []
+                continue
+            # for each path, create a new layer for visualization
+            layername = f"path{layer_number+i}"
+            if layername not in nd.cfg.reuse_pathlayers:
+                layer = nd.add_layer(layername, (layer_number + i, 0))
+                nd.cfg.reuse_pathlayers.add(layername)
             else:
-                x, y, a = nd.diff(cell_node, nb)
-            posrel = nd.Pointer(x, y, a)
-            if flip == -1:
-                posrel.flip()
-        #    print(f"  opt_position {posrel}")
-            next_nodes_opt.append((nb, L, direction, posrel.xya(), path, sigtype))
-        if len(next_nodes_opt) > 0:
-            count += 1
-            break # found optical link, leave while loop
+                layer = nd.get_layer(layername)
+            points = []
+            for segment in segments:
+                points.append(segment.position_in)
+            points.append(segments[-1].position_out)
 
-        # If no optical edge was found, drill down, if possible.
-        #   Do not drill down in auxiliary cells that have (by definition) no netlist function.
-        for nb, trans in cell_node.nb_geo:
-            if nb.cnode.instance is not None and not nb.cnode.cell.auxiliary:
-                break # found instance level below represented via node nb.
-                # assume max *one* instance below can be connected
-        if nb.cnode.instance is None:
-            break # bottom reached, leave while loop
+            # place polyline that visualizes the paths
+            nd.Polyline(points, layer=layer, width=width, pathtype=1).put(0, 0, 0)
+
+            # place pins that visualize the startpin and endpin of each path.
+            nd.show_pin(pin=points[0], radius=2 * width, width=1 * width, layer=layer)
+            nd.show_pin(pin=points[-1], radius=1.5 * width, width=1.5 * width, layer=layer)
+
+            # update dictionary of the positions. Can be used for debugging purposes.
+            points_dict[i] = points
+
+        if paths2cell is not None:
+            nd.cfg.cells.pop()
+            nd.cfg.patchcell = False
+
+        return points_dict
+    show = show_paths
+
+    def _findpaths(
+        self,
+        startpin,
+        endpoints=None,
+        logfilename="trace.log",
+        logging_level=0,
+        reverse=False,
+        allow_splitting_nodes=False,
+        trackertype="dis",
+        instance_stack=None,
+        tracker_kwargs=None,
+    ):
+        """
+        Function to find the paths originating from a certain starting pin. The tracing follows the following algorithm:
+        Step 1: Look for optical connections in a cell and move to a connection. For example, if the start pin is pin a0
+         of a straight section step 1 will yield the b0 pin of that same straight section and the length from a0 to b0
+        Step 2: Look for pin to pin connections from a pin. This step yields pins connected to the pin found in step 1.
+
+        If in step 1 multiple optical connections are found, the state for those connections is stored as loose ends.
+        When the end of the current path is reached, the algorithm will backtrack to one of the loose ends and continue
+        tracking from there. Tracking continues until all paths have reached an endpoint.
+
+        Args:
+            startpin (Node): Startpoint for the pathfinding algorithm.
+            logfilename (str): Name of the logfile.
+            endpoints (list): Optional List of pins, cells and/or instances where the pathfinder will terminate the paths
+            logging_level (int): Level of logging. At 0 no logfile is created. At 1 a logfile is created with
+                    different pins traversed. At 2, the act of moving up and down the hierarchy is also logged.
+            reverse (bool): If true, pathfinder will start tracking in the reverse direction. The default direction is
+                    to look for optical connections at the start. If reverse is true, the pathfinder will look for
+                    pin2pin connections first.
+            allow_splitting_nodes (bool): If true, the pathfinder will handle a splitting path in pin2pin connections.
+                    By default, this is false: If this happens, the pathfinder will terminate the path and raise an error
+            trackertype (str): Type of optical connections to look for.
+            instance_stack (list): Optional instance stack that a user can provide. This allows the pathfinder to break
+                    out of the starting level.
+        Returns:
+            endpins (list): List of the endpins (Nodes) of all paths that were found.
+            paths_dict (dict): Dictionary of all paths that were found. Each path entry contains a list of [pin, length]
+                        where pin is the next pin and length is the optical length between that pin and the previous pin
+        """
+
+        # initialize logger
+        logger = Logger(filename=logfilename, logging_level=logging_level, trackertype=trackertype)
+
+        # define parameters for tracking of paths
+        # instance_stack stores hierarchical information, which is used to look for pin connections up in the hierarchy
+        if instance_stack is None:
+            instance_stack = []
+            current_pin = startpin
         else:
-            count += 1
-            current_pin = nb
-            instance = nb.cnode.instance
-            if instance.cnode.flip:
-                flip *= -1
-            instance_stack.append(instance)
-            if log:
-                F.write(f"{count*'  '}pin '{current_pin.name:10}' in inst '{current_pin.cnode.instance.name:20}' I-{current_pin.cnode.instance.id}\n")
+            instance_stack = instance_stack.copy()
+            try:
+                current_pin = startpin.up
+            except AttributeError:
+                current_pin = startpin
 
-    if len(next_nodes_opt) == 0:
-       if log:
-           msg = "NO EDGE FOUND WHILE DRILLING DOWN: DEAD END. No path connection found in node {}.\n".format(cell_node)
-           F.write(msg)
-       #raise Exception(msg)
-       return [None] * 4
-    else:
-       return cell_node, next_nodes_opt, instance_stack, flip
+        # visited pins stores all pins previously visited, which is used for detecting looped paths
+        visited_pins = []
+        # loose end stores the tracking state of all but one connection when multiple connections are found.
+        loose_ends = []
+        # boolean for decision-making:
+        backtracking = False
 
+        if not reverse:
+            perform_step_1 = True
+            perform_step_2 = False
+        else:
+            perform_step_1 = False
+            perform_step_2 = True
 
-def _pathfinder(
-    start,
-    end=None,
-    log=False,
-    logfilename='trace.log',
-    tracker='dis',
-    end_cell_name='',
-):
-    """Trace an optical connection by decending an ascending through cells with optical neighbors.
+        tracking = True
 
-    If the start node is a ribbon pin (A0 or B0), it will trace all paths in
-    a ribbon in an arrayed style. Otherwise it traces a singular path.
-    opt_netlist holds the pin connection in a default dictionary. In principal,
-    this dictionary can hold any data shared between the two pins.
+        # endpins stores the endpins of all paths traced, this is an output
+        endpins = []
 
-    Args:
-        start (Node): starting Node from where it will start the trace
-        end (Node): if provided, the trace will stop et the ending node
-        log (bool): if True, print all nodes it passes in an indented way
-        trackertype (str): Type of connection to trace at the beginning. Default is 'dis' (distance)
+        # variables for output
+        path_id = 0
+        pinlist = []
+        paths_dict = {}
 
-    Returns:
-        dict: a default dictionary with Pin connections and their lengths
-    """
-    trackertype = tracker
-    def foo_print_instances(instance_stack):
-        print(', '.join([i.name for i in instance_stack]))
+        # before tracking, check if startpin is an endpin
+        endpoint_reached, endpoint = self._is_endpoint(current_pin, endpoints)
+        if endpoint_reached:
+            # End of path. Stop performing path tracking of this path
+            tracking = False
 
-    global path, count, F
-    if log:
-        F = open(logfilename, 'w')
+            # end of path, but we need to go up the instance stack in some way before output
+            current_pin, instance_stack = self._drill_up(current_pin, instance_stack)
+            # update logger and output lists
+            logger.log(current_pin, endpoint=endpoint, status="endpoint")
 
-    opt_netlist = [] # Stores the segments of a path
-    paths = {} # dictionary containing all paths (each path being a list of segments)
-    paths_endpin = {}
-    count = 0
-    loose_ends = []  # store settings for all neighbours of PIN1 in a tuple before travelling onto the next pin.
-    visited = set()
-    flip = 1
-    start_mem = start
+            # if the endpoint is a pin, add that pin to endpins and paths_dict instead of the current pin
+            if isinstance(endpoint, nd.Node):
+                endpins.append(endpoint)
+            else:
+                endpins.append(current_pin)
+            paths_dict[path_id] = pinlist
 
-    # single path:
-    instance_stack = None
-    point_stack = [start.copy(inplace=True)]
-    #print('\n')
+        for instance in instance_stack:
+            instance.C2I_nodemap = {
+                node.up: node for node in instance.pin.values()
+            }  # Cell2Instance mapping for the instance nodes.
 
-    end = False
-    backtrack = False
-    while not end:
-        #print(instance_stack)
-        if not instance_stack and backtrack:
-            if log:
-                F.write(f"{(count-1)*'  '}pin '{start.name:10}' in cell '{start.cnode.cell.cell_name:20}' C-{start.cnode.cell.id}\n")
+        logger.log(current_pin, status="start")
 
-        # Drill down from 'start' to a PIN1 with an optical edge between PIN1 and PIN2 at cell level.
-        # PIN2 options come back as a list of PIN2 options: tuple PIN2list.
-        if not backtrack:
-            PIN1, PIN2list, instance_stack, flip = find_optical_level(
-                start,
+        # if reversing, we need to drill down to ensure that any pin2pin connection is found
+        if reverse:
+            logger.log(current_pin, status="reverse")
+            current_pin, instance_stack = self._drill_down(
+                current_pin,
                 instance_stack,
-                log,
-                flip,
-                trackertype,
-                end_cell_name,
+                logger=logger,
             )
 
-            if PIN1 is None:
-                #if log:
-                    #F.write(f"{(count+1)*'  '}=== END PATH {path}: LOOP CLOSURE IN C-{PIN1.cnode.cell.id} on pin '{PIN1.name}'\n\n")
-                if start_mem == start:
-                    nd.logger.warning(f"Start pin {start.cnode.cell.cell_name} has no connection for trackertype '{trackertype}'.")
+        while tracking:
+
+            # if end of path is reached and there are still loose ends, track paths from one of the stored loose ends
+            if backtracking:
+                # obtain state of one of the loose ends
+                (
+                    current_pin,
+                    instance_stack,
+                    visited_pins,
+                    pinlist,
+                    perform_step_1,
+                    perform_step_2,
+                    tracker_kwargs,
+                ) = loose_ends.pop()
+                logger.log(
+                    current_pin, status="backtracked", instance_stack=instance_stack
+                )
+                # stop backtracking and start tracking from the current pin
+                backtracking = False
+
+                # check if the pin backtracked to is actually an endpin:
+                endpoint_reached, endpoint = self._is_endpoint(
+                    current_pin, endpoints, instance_stack
+                )
+                if endpoint_reached:
+                    # End of path. Stop performing path tracking of this path
+                    perform_step_1 = False
+                    perform_step_2 = False
+                    # end of path, but we need to go up the instance stack in before output
+                    current_pin, instance_stack = self._drill_up(
+                        current_pin, instance_stack
+                    )
+                    # update logger and output lists
+                    logger.log(current_pin, endpoint=endpoint, status="endpoint")
+
+                    # if the endpoint is a pin, add that pin to endpins and paths_dict instead of the current pin
+                    if isinstance(endpoint, nd.Node):
+                        endpins.append(endpoint)
+                    else:
+                        endpins.append(current_pin)
+
+                    paths_dict[path_id] = pinlist
+                    path_id += 1
+
+                    # check if there are any loose ends to track
+                    if not loose_ends:
+                        # no loose ends, stop tracking
+                        break
+                    else:
+                        # loose ends, start backtracking
+                        backtracking = True
+                        logger.log(current_pin, status="backtracking")
+                    # set current pin to None as we are currently not tracking from a pin
+                    current_pin = None
+
+            if perform_step_1:
+                # STEP 1: Find optical connections
+                tracker_kwargs_in = tracker_kwargs
+                input_pin = current_pin
+                (
+                    segment_start,
+                    optical_connections,
+                    instance_stack,
+                ) = self._find_optical_connections(
+                    current_pin,
+                    instance_stack,
+                    logger=logger,
+                    trackertype=trackertype,
+                    tracker_kwargs=tracker_kwargs_in,
+                )
+                # deal with possibility of no optical connections
+                if optical_connections is None:
+                    # End of path. Stop performing path tracking of this path
+                    perform_step_1 = False
+                    perform_step_2 = False
+
+                    # update logger and output lists
+                    logger.log(current_pin, status="no_optical_connection")
+                    logger.log(current_pin, status="end_of_path")
+                    endpins.append(current_pin)
+                    paths_dict[path_id] = pinlist
+                    path_id += 1
+                    # check if there are any loose ends to track
+                    if not loose_ends:
+                        # no loose ends, stop tracking
+                        break
+                    else:
+                        # loose ends, start backtracking
+                        backtracking = True
+                        logger.log(current_pin, status="backtracking")
+                    # set current pin to None as we are currently not tracking from a pin
+                    current_pin = None
+
+                # found optical connection(s), start tracking from (one of) the optical connections
                 else:
-                    paths[path] = opt_netlist
-                    paths_endpin[path] = pinid
-                    path += 1
-                if len(loose_ends) > 0:
-                    backtrack = True
-                    if log:
-                        F.write(f"{(count)*'  '}=== BACK TRACK ===\n")
-                    continue
+                    # flow control: need to perform step 1 next
+                    perform_step_1 = False
+                    perform_step_2 = True
+
+                    # move to new pin, update loose ends
+                    (
+                        current_pin,
+                        connection_length,
+                        direction,
+                        posrel,
+                        path,
+                        sigtype,
+                        tracker_kwargs_out,
+                    ) = optical_connections.pop()
+                    logger.log(
+                        current_pin, status="optical_connection", L=connection_length
+                    )
+                    connection_length = (
+                        ProtectedPartial(
+                            filter_eval(connection_length), **tracker_kwargs
+                        )
+                        if callable(connection_length)
+                        else connection_length
+                    )
+                    tracker_kwargs = tracker_kwargs_out
+
+                    # update the pinlist for this path
+                    pinlist_copy = pinlist.copy()
+                    position_in = self.get_pin_coordinate_up_instance_stack(segment_start, instance_stack)
+                    position_out = self.get_pin_coordinate_up_instance_stack(current_pin, instance_stack)
+                    pinlist.append(
+                        Segment(
+                            segment_start,
+                            current_pin,
+                            connection_length,
+                            position_in,
+                            position_out,
+                            upper_pin_in=input_pin,
+                            tracker_kwargs_in=tracker_kwargs_in,
+                            tracker_kwargs_out=tracker_kwargs_out,
+                        )
+                    )
+
+                    # store remaining connections as loose ends that will be visited after path end is reached
+                    for _ in optical_connections:
+                        (
+                            optical_connection,
+                            connection_length,
+                            direction,
+                            posrel,
+                            path,
+                            sigtype,
+                            tracker_kwargs_out,
+                        ) = _
+
+                        _pinlist_copy = pinlist_copy.copy()
+                        position_in = self.get_pin_coordinate_up_instance_stack(segment_start, instance_stack)
+                        position_out = self.get_pin_coordinate_up_instance_stack(optical_connection, instance_stack)
+                        _pinlist_copy.append(
+                            Segment(
+                                segment_start,
+                                optical_connection,
+                                connection_length,
+                                position_in,
+                                position_out,
+                                upper_pin_in=input_pin,
+                                tracker_kwargs_in=tracker_kwargs_in,
+                                tracker_kwargs_out=tracker_kwargs_out,
+                            )
+                        )
+                        loose_ends.append(
+                            [
+                                optical_connection,
+                                instance_stack.copy(),
+                                visited_pins.copy(),
+                                _pinlist_copy,
+                                perform_step_1,
+                                perform_step_2,
+                                tracker_kwargs_out,
+                            ]
+                        )
+
+                # If a current pin was found, perform checks:
+                if current_pin is not None:
+                    # Check if current pin was already visisted.
+                    # generate a unique pin_id to differentiate between pins in different instances of the same cell
+                    pin_id = (tuple(instance_stack), current_pin)
+                    if pin_id in visited_pins:
+                        # End of path. Stop performing path tracking of this path
+                        perform_step_1 = False
+                        perform_step_2 = False
+                        # path is a loop, drill up from current pin
+                        current_pin, instance_stack = self._drill_up(
+                            current_pin, instance_stack
+                        )
+
+                        # update logger and output lists
+                        logger.log(current_pin, status="loop")
+                        endpins.append(current_pin)
+                        # pinlist.append([current_pin, connection_length])
+                        paths_dict[path_id] = pinlist
+                        path_id += 1
+                        # check if there are any loose ends to track
+                        if not loose_ends:
+                            # no loose ends, stop tracking
+                            break
+                        else:
+                            # loose ends, start backtracking
+                            backtracking = True
+                            logger.log(current_pin, status="backtracking")
+                        # set current pin to None as we are currently not tracking from a pin
+                        current_pin = None
+                    # if no loop, store the current pin for the sake of future loop detection
+                    else:
+                        visited_pins.append((tuple(instance_stack), current_pin))
+
+                    # check if current pin is at an endpoint
+                    if current_pin is not None:
+                        endpoint_reached, endpoint = self._is_endpoint(
+                            current_pin, endpoints, instance_stack
+                        )
+                        if endpoint_reached:
+                            # End of path. Stop performing path tracking of this path
+                            perform_step_1 = False
+                            perform_step_2 = False
+                            # end of path, but we need to go up the instance stack in some way before output
+                            current_pin, instance_stack = self._drill_up(
+                                current_pin, instance_stack
+                            )
+                            # update logger and output lists
+                            logger.log(current_pin, endpoint=endpoint, status="endpoint")
+
+                            # if the endpoint is a pin, add that pin to endpins and paths_dict
+                            if isinstance(endpoint, nd.Node):
+                                endpins.append(endpoint)
+                            paths_dict[path_id] = pinlist
+                            path_id += 1
+
+                            # check if there are any loose ends to track
+                            if not loose_ends:
+                                # no loose ends, stop tracking
+                                break
+                            else:
+                                # loose ends, start backtracking
+                                backtracking = True
+                                logger.log(current_pin, status="backtracking")
+                            # set current pin to None as we are currently not tracking from a pin
+                            current_pin = None
+
+            if perform_step_2:
+                # STEP 2: Find pin connections from current_pin
+                (
+                    connected_pins,
+                    upper_output_pin,
+                    instance_stack,
+                ) = self._find_connected_pins(
+                    current_pin, instance_stack, logger=logger
+                )
+                if reverse:
+                    reverse = False
                 else:
-                    end=True
-                    break
+                    pinlist[-1].upper_pin_out = upper_output_pin
+                # Found no connected pins
+                if connected_pins is None:
+                    # End of path. Stop performing path tracking of this path
+                    perform_step_1 = False
+                    perform_step_2 = False
+                    # end of path, but we need to go up the instance stack in some way before output
+                    current_pin, instance_stack = self._drill_up(
+                        current_pin, instance_stack
+                    )
+                    # update logger and output lists
+                    logger.log(current_pin, status="end_of_path")
+                    endpins.append(current_pin)
+                    # pinlist.append([current_pin, connection_length])
+                    paths_dict[path_id] = pinlist
+                    path_id += 1
 
-            pinid = (tuple(instance_stack), PIN1, trackertype)
-            if pinid in visited:
-                if log:
-                    F.write(f"{(count+1)*'  '}=== END PATH {path}: LOOP CLOSURE IN C-{PIN1.cnode.cell.id} on pin '{PIN1.name}'\n\n")
-                paths[path] = opt_netlist
-                paths_endpin[path] = pinid
-                path += 1
-                if len(loose_ends) > 0:
-                   backtrack = True
-                   if log:
-                       F.write(f"{(count)*'  '}=== BACK TRACK ===\n")
+                    # check if there are any loose ends to track
+                    if not loose_ends:
+                        # no loose ends, stop tracking
+                        break
+                    else:
+                        # loose ends, start backtracking
+                        backtracking = True
+                        logger.log(current_pin, status="backtracking")
+                    # set current pin to None as we are currently not tracking from a pin
+                    current_pin = None
+
+                # Found connections
                 else:
-                   end = True
-                continue
+                    # flow control: need to perform step 1 next
+                    perform_step_1 = True
+                    perform_step_2 = False
 
-            visited.add(pinid)
-            PIN2tup = PIN2list.pop()
-            for tup in PIN2list:
-                loose_ends.append((
-                    PIN1,
-                    tup,
-                    instance_stack.copy(),
-                    count,
-                    opt_netlist.copy(),
-                    point_stack.copy(),
-                    visited.copy(),
-                    flip
-                ))
-        else:
-            (   PIN1,
-                PIN2tup,
-                instance_stack,
-                count,
-                opt_netlist,
-                point_stack,
-                visited,
-                flip
-            ) = loose_ends.pop()
-            if log:
-                F.write(f"{(count-1)*'  '}pin '{PIN1.name:10}' in cell '{PIN1.cnode.cell.cell_name:20}' C-{PIN1.cnode.cell.id}\n")
+                    if len(connected_pins) == 1:
+                        # move to new pin. For pin to pin connection the connection length is zero
+                        connected_pin_1 = connected_pins.pop()
 
-        #PIN2, L, dir, point, line = PIN2tup
-        old_trackertype = trackertype
-        PIN2, L, dir, point, line, trackertype = PIN2tup
-        backtrack = False
-        x, y, a = point
-        point_old = point_stack[-1]
-        point_new = point_old.move(x, y, a+180)
-        point_stack.append(point_new)
+                        if not instance_stack:
+                            # store the previous pin. We want to return this pin in the case of splitting nodes
+                            # update current pin with the connected pin that we found.
+                            current_pin = connected_pin_1
+                            logger.log(current_pin, status="pin_connection")
+                        # if we are not at the top level, try to go to the top level first
+                        else:
+                            try:
+                                current_pin, instance_stack = self._drill_up(
+                                    connected_pin_1, instance_stack
+                                )
+                                logger.log(current_pin, status="pin_connection")
+                            except:
+                                current_pin = connected_pin_1
+                                logger.log(current_pin, status="pin_connection")
+                    else:
+                        # store other connected pins as loose ends, if splitting nodes are allowed
+                        if allow_splitting_nodes:
+                            nd.main_logger(f'Splitting node at pin {current_pin}, allow_splitting_nodes is set '
+                                           f'to True.', 'warning')
+                            connected_pin_1 = connected_pins.pop()
 
-        if L is None:
-            L = 0
-            nd.logger.warning(f"Optical connect not None in cell {PIN2.cnode.cell.cell_name}. Setting to 0.")
-            # TODO: raise a netlist error?
-        opt_netlist.append((PIN1, PIN2, L, (point_old, point_new), line, (old_trackertype, trackertype)))
+                            if not instance_stack:
+                                # store the previous pin. We want to return this pin in the case of splitting nodes
+                                # update current pin with the connected pin that we found.
+                                current_pin = connected_pin_1
+                                logger.log(current_pin, status="pin_connection")
+                            # if we are not at the top level, try to go to the top level first
+                            else:
+                                try:
+                                    current_pin, instance_stack = self._drill_up(
+                                        connected_pin_1, instance_stack
+                                    )
+                                    logger.log(current_pin, status="pin_connection")
+                                except:
+                                    current_pin = connected_pin_1
+                                    logger.log(current_pin, status="pin_connection")
 
-        if log:
-            if callable(L):
-                edge = "CM"
+                            for connected_pin in connected_pins:
+                                # add this pin and connection length (0 for pin to pin connection) to copy of pinlist.
+                                pinlist_copy = pinlist.copy()
+                                # store the loose ends
+                                loose_ends.append(
+                                    [
+                                        connected_pin,
+                                        instance_stack.copy(),
+                                        visited_pins.copy(),
+                                        pinlist_copy,
+                                        perform_step_1,
+                                        perform_step_2,
+                                        tracker_kwargs,
+                                    ]
+                                )
+                        # if splitting nodes are not allowed (which is the default setting), we need to terminate this
+                        # path and raise an error
+                        else:
+                            nd.main_logger(f'Splitting node at pin {current_pin}. Terminated path.','error')
+                            perform_step_1 = False
+                            perform_step_2 = False
+                            # terminate path, but we need to go up the instance stack in some way before output
+                            current_pin, instance_stack = self._drill_up(
+                                current_pin, instance_stack
+                            )
+                            # update logger and output lists
+                            logger.log(current_pin, status="end_of_path_splitting_node", connected_pins=connected_pins)
+                            endpins.append(current_pin)
+                            # pinlist.append([current_pin, connection_length])
+                            paths_dict[path_id] = pinlist
+                            path_id += 1
+
+                            # check if there are any loose ends to track
+                            if not loose_ends:
+                                # no loose ends, stop tracking
+                                break
+                            else:
+                                # loose ends, start backtracking
+                                backtracking = True
+                                logger.log(current_pin, status="backtracking")
+                            # set current pin to None as we are currently not tracking from a pin
+                            current_pin = None
+
+                    # check if new current pin is at an endpoint
+                    if current_pin is not None:
+                        endpoint_reached, endpoint = self._is_endpoint(
+                            current_pin, endpoints
+                        )
+                        if endpoint_reached:
+                            # End of path. Stop performing path tracking of this path
+                            perform_step_1 = False
+                            perform_step_2 = False
+
+                            # end of path, but we need to go up the instance stack in some way before output
+                            current_pin, instance_stack = self._drill_up(
+                                current_pin, instance_stack
+                            )
+                            # update logger and output lists
+                            logger.log(current_pin, endpoint=endpoint, status="endpoint")
+
+                            # if the endpoint is a pin, add that pin to endpins and paths_dict instead of the current pin
+                            if isinstance(endpoint, nd.Node):
+                                endpins.append(endpoint)
+                                # pinlist.append([endpoint, connection_length])
+                            else:
+                                endpins.append(current_pin)
+                                # pinlist.append([current_pin, connection_length])
+                            paths_dict[path_id] = pinlist
+                            path_id += 1
+
+                            # check if there are any loose ends to track
+                            if not loose_ends:
+                                # no loose ends, stop tracking
+                                break
+                            else:
+                                # loose ends, start backtracking
+                                backtracking = True
+                                logger.log(current_pin, status="backtracking")
+                            # set current pin to None as we are currently not tracking from a pin
+                            current_pin = None
+
+        logger.log(pin=endpins, status="end_of_tracking", paths_dict=paths_dict)
+
+        # return the endpins that were found during the tracking
+        return endpins, paths_dict
+
+
+    def _generate_endpins_dictionary(
+            self,
+            paths_dict,
+            startpin,
+            instance_stack=None,
+    ):
+        """
+        Function to generate an endpins dictionary that contains the endpins and their position at the highest
+        hierarchical level.
+
+        args:
+            paths_dict (dict): Dictionary of the paths, obtained from self._findpaths().
+            startpin (nd.Pin): Startpin from which tracking is performed.
+            instance_stack (list): List of instances above the startpin.
+
+        returns:
+            endpins_dict (dict): dictionary containing a dictionary of the endpin and position for each path.
+        """
+        endpins_dict = {}
+
+        if instance_stack is None:
+            instance_stack = []
+
+        for i, segments in paths_dict.items():
+            # if paths were found, use the segments to obtain each endpin and position
+            if len(segments) > 0:
+                endpins_dict[i] = {
+                    'endpin': segments[-1].pin_out,
+                    'position': segments[-1].position_out
+                }
+            # if no paths were found (termination on startpin), extract the position of the startpin.
             else:
-                edge = f"{L:0.3f}"
-            F.write(f"{count*'  '}=== JUMP OPTICAL lINK, length={edge} ===\n")
-            #F.write(f"{(count-1)*'  '}pin '{PIN2.name:10}' in cell '{PIN2.cnode.cell.cell_name:20}' C-{PIN2.cnode.cell.id}\n")
+               endpins_dict[i] = {
+                    'endpin': startpin,
+                    'position': self.get_pin_coordinate_up_instance_stack(startpin, instance_stack)
+                }
 
+        return endpins_dict
 
-        if start.cnode.instance is None and not instance_stack:
-            if log:
-                F.write(f"{count*'  '}=== BREAK OUT TOPCELL ===\n")
-            paths[path] = opt_netlist
-            paths_endpin[path] = (tuple(instance_stack), PIN2)
-            break
+    def _get_lengths(
+        self,
+        segments=None,
+    ):
+        """
+        Get the lengths of all the paths stored in a paths dictionary
 
+        Args:
+            segments (dict): A dictionary containing the paths found using _findpaths()
+        Returns:
+            lengths (list): A list of all the pathlengths.
+        """
+        if segments is None:
+            segments = self.segments
 
-        # Drill upward from cell PIN2 (with optical connection) until a connection to a next instance is found:
+        lengths = []
+        for i in range(len(segments)):
+            lengths.append(pathlength(segments[i]))
+
+        return lengths
+
+    def _drill_down(
+            self,
+            start,
+            instance_stack=None,
+            logger=None,
+    ):
+        """Drill down from a node in the cell hierarchy until the max depth is reached
+
+        """
+        if instance_stack is None:
+            instance_stack = []
+
+        if start.cnode.instance is not None:  # instance pin start
+            current_pin = start
+            instance = start.cnode.instance
+            instance_stack.append(instance)
+        else:  # cell pin start
+            current_pin = start
+
+        while True:
+            if current_pin.cnode.instance is not None:  # pin resides in an instance
+                instance.C2I_nodemap = {
+                    node.up: node for node in instance.pin.values()
+                }  # Cell2Instance mapping for the instance nodes.
+                cell_node = (
+                    current_pin.up
+                )  # go to corresponding cell node of current_pin before drilling down
+            else:
+                cell_node = current_pin
+
+            #   Do not drill down in auxiliary cells that have (by definition) no netlist function.
+            for nb, trans in cell_node.nb_geo:
+                if nb.cnode.instance is not None and not nb.cnode.cell.auxiliary:
+                    break  # found instance level below represented via node nb.
+                    # assume max *one* instance below can be connected
+            if nb.cnode.instance is None:
+                break  # bottom reached, leave while loop
+            else:
+                current_pin = nb
+                instance = nb.cnode.instance
+                instance_stack.append(instance)
+                if logger is not None:
+                    logger.log(current_pin, status="drill_down")
+
+        start_segment = cell_node
+        return start_segment, instance_stack
+
+    def _find_optical_connections(
+        self,
+        start,
+        instance_stack=None,
+        logger=None,
+        flip=1,
+        trackertype="dis",
+        end_cell_name="",
+        tracker_kwargs=None,
+    ):
+        """Drill down from a node in the cell hierarchy until a valid edge is found or max depth is reached.
+
+        This function finds if node <start> has an optical edge.
+        If not, it is checked if node is connected to an instance to, if so,
+        drill down into it.
+        When drilling down this function creates a "C2I_nodemap" attribute (cell2instance)
+        in every Instance it passes to find the way back up from a Cell to the Instance along
+        the celltree path it came from.
+
+        Args:
+            start (Node): a higher level Node from which you want to go down
+            log (bool): if True print all nodes passed with an indent proportional to the cell level depth.
+
+        Returns:
+            Node, Node, list, float:
+                cell_node (Node): start Node of an optical connection,
+                nb_opt (Node): end node of optical connection,
+                instance_stack (list): list of Instances traversed,
+                length (float): length (value) of the connection
+        """
+        # TODO improve this docstring, change names of variables to be more descriptive, add comments explaining how
+        #  this works
+        # TODO refactor?
+
+        if instance_stack is None:
+            instance_stack = []
+
+        if start.cnode.instance is not None:  # instance pin start
+            current_pin = start
+            instance = start.cnode.instance
+            instance_stack.append(instance)
+            if instance.cnode.flip:
+                flip *= -1
+        else:  # cell pin start
+            current_pin = start
+
+        # drill down until a signal edge is found or the bottom is reached:
+        while True:
+            next_nodes_opt = []  # store signal connections.
+
+            if current_pin.cnode.instance is not None:  # pin resides in an instance
+                instance.C2I_nodemap = {
+                    node.up: node for node in instance.pin.values()
+                }  # Cell2Instance mapping for the instance nodes.
+                cell_node = (
+                    current_pin.up
+                )  # go to corresponding cell node of current_pin before drilling down
+                if cell_node.cnode.cell.cell_name == end_cell_name:
+                    break  # end of path, leave while loop.
+            else:
+                cell_node = current_pin
+
+            # Find (and store) all signal paths of cell_node, if any:
+            for nb, L, direction, sigtype, path, extra_out in cell_node.path_nb_iter(
+                sigtype=trackertype,
+                extra=tracker_kwargs,
+            ):
+                # find xya position of the optical nodes for visualisation
+                if nb is None:
+                    x, y, a = 0, 0, 0  # termination
+                else:
+                    x, y, a = nd.diff(cell_node, nb)
+                posrel = nd.Pointer(x, y, a)
+                if flip == -1:
+                    posrel.flip()
+                next_nodes_opt.append(
+                    (nb, L, direction, posrel.xya(), path, sigtype, extra_out)
+                )
+            if len(next_nodes_opt) > 0:
+                if logger is not None:
+                    logger.log(cell_node, status="drill_down")
+                break  # found optical link, leave while loop
+
+            # If no optical edge was found, drill down, if possible.
+            #   Do not drill down in auxiliary cells that have (by definition) no netlist function.
+            for nb, trans in cell_node.nb_geo:
+                if nb.cnode.instance is not None and not nb.cnode.cell.auxiliary:
+                    break  # found instance level below represented via node nb.
+                    # assume max *one* instance below can be connected
+            if nb.cnode.instance is None:
+                break  # bottom reached, leave while loop
+            else:
+                current_pin = nb
+                instance = nb.cnode.instance
+                if instance.cnode.flip:
+                    flip *= -1
+                instance_stack.append(instance)
+                if logger is not None:
+                    logger.log(current_pin, status="drill_down")
+
+        start_segment = cell_node
+        if len(next_nodes_opt) == 0:
+            return [None] * 3
+        else:
+            return start_segment, next_nodes_opt, instance_stack
+
+    def _find_connected_pins(
+        self,
+        pin,
+        instance_stack,
+        logger,
+    ):
+        """
+        Function that looks for pin-to-pin connections to the input pin.
+
+        Args:
+            pin (Node): pin to find pin-to-pin connections for.
+            instance_stack (list): List of parent instances/cells of the input pin
+            logger (Logger): Logger object used for logging purposes
+
+        Returns:
+            adjacent_pins (list): list of all pins connected to the input pin. If no connected pins are found,
+                                    this returns None.
+            instance_stack (list):List of parent instances/cells of the output pins.  If no connected pins are found,
+                                    returns the initial instance stack.
+        """
+
+        # save the instance stack. If no connect pins are found, we need to output the old instance stack
+        old_instance_stack = instance_stack.copy()
+
+        # while there are instances in the instance stack, go up in hierarchy and look for pin connections
         while instance_stack:
-            if log:
-                F.write(f"{(count-1)*'  '}pin '{PIN2.name:10}' in cell '{PIN2.cnode.cell.cell_name:20}' C-{PIN2.cnode.cell.id}\n")
+            adjacent_pins = []
+            parent_pins = []
+            # move up one step
+            instance = instance_stack[-1]
+            pin = instance.C2I_nodemap[pin]
 
-            nbs_side = []
-            nbs_up = []
+            # look at all pins connected to this pin
+            for node in self._nb_filter_geo(pin):
+                # if node is in a different instance with the same parent, it is a connected node
+                if (
+                    node.cnode.instance is not pin.cnode.instance
+                    and node.cnode.parent_cnode is pin.cnode.parent_cnode
+                    and node.width != 0
+                ):
+                    adjacent_pins.append(node)
+                # otherwise, it is possible that the node is a parent node.
+                elif (
+                    pin.cnode.parent_cnode is node.cnode
+                    and pin.x == node.x
+                    and pin.y == node.y
+                ):
+                    parent_pins.append(node)
+
+            # if we find a connected pin, return that connected pin and an updated instance stack
+            if adjacent_pins:
+                instance_stack.pop()
+                logger.log(pin, status="drill_up")
+                return adjacent_pins, pin, instance_stack
+
+            # if we don't find a connected pin but do find a parent node,
+            # move to parent node and update the instance stack
+            elif parent_pins:
+                pin = parent_pins[0]
+                instance = instance_stack.pop()
+
+                logger.log(pin, status="drill_up")
+
+                # if instance stack is empty, that means there is no pin to pin connection.
+                if instance_stack == []:
+                    logger.log(pin, status="no_pin_connection")
+                    # return None for adjacent pins and the old instance stack.
+                    adjacent_pins = None
+                    instance_stack = old_instance_stack
+                    return adjacent_pins, pin, instance_stack
+
+            # if we don't find any adjacent nodes or parent nodes, that means there are no pin to pin connections
+            else:
+                logger.log(pin, status="no_pin_connection")
+                # return None for adjacent pins and the old instance stack.
+                adjacent_pins = None
+                instance_stack = old_instance_stack
+                return adjacent_pins, pin, instance_stack
+
+        logger.log(pin, status="no_pin_connection")
+        # return None for adjacent pins and the old instance stack.
+        adjacent_pins = None
+        instance_stack = old_instance_stack
+        return adjacent_pins, pin, instance_stack
+
+    def _drill_up(
+        self,
+        pin,
+        instance_stack,
+    ):
+        """
+        Function to go to the highest hierarchical level saved in the instance stack corresponding to pin.
+
+        Args:
+            pin (Node): pin from which we move up.
+            instance_stack (list): List of parent instances/cells of the input pin.
+        Returns:
+            pin (Node): top level pin.
+            instance_stack (list): Updated list of parent instances/cells of the input pin.
+        """
+
+        # continue trying to go up in hierarchy until the instance_stack is empty
+        while instance_stack != []:
+            # consider the next instance:
             instance = instance_stack[-1]
             try:
-                pin2 = instance.C2I_nodemap[PIN2] # instance pin2 for cell PIN2 up tree.
+                pin = instance.C2I_nodemap[pin]
+            # if the top level is the instance of a cell, it's not possible to find a pin one level up for the
+            # last entry of the instance stack
             except:
-                if log:
-                    F.write(f"{count*'  '}END PATH {path}: No way back to instance I-{instance.id} from cell '{PIN2.cnode.cell.cell_name}' for pin '{PIN2.name}. (Not registered in pin dict.)'\n")
-                    #F.write(f"{count*'  '}Node: {PIN2}\n")
-                paths[path] = opt_netlist
-                paths_endpin[path] = (tuple(instance_stack), PIN2, trackertype)
-                path += 1
-                if len(loose_ends) > 0:
-                    backtrack = True
-                    if log:
-                        F.write(f"{(count)*'  '}=== BACK TRACK ===\n")
-                    count -= 1
-                else:
-                    end = True
                 break
-            count -= 1
-            if log:
-                F.write(f"{count*'  '}pin '{pin2.name:10}' in inst '{pin2.cnode.instance.name:20}' I-{pin2.cnode.instance.id}\n")
-            # TODO: look for optical connections?
-            for node in nb_filter_geo(pin2):
-                if (
-                    node.cnode.instance is not pin2.cnode.instance
-                    and node.cnode.parent_cnode is pin2.cnode.parent_cnode
-                    and node.width != 0
-                    # check distance == 0
-                    # check for begin in a specific xs?
-                ):
-                    nbs_side.append(node)
-                elif pin2.cnode.parent_cnode is node.cnode:
-                    nbs_up.append(node)
-            if nbs_side:
-                start = nbs_side[0] # TODO: iterate over the full set of side-nodes.
-                if len(nbs_side) > 1:
-                    raise Exception('Splitting Node (node with more than one connection).')
-                I = instance_stack.pop()
-                if I.cnode.flip:
-                    flip *= -1
-                if log:
-                    F.write(f"{(count)*'  '}=== JUMP TO INSTANCE ===\n")
-                break
-            elif nbs_up: # no neighbours found, back up: look for nb in parent
-                I = instance_stack.pop()
-                if I.cnode.flip:
-                    flip *= -1
 
-                PIN2 = nbs_up[0]
-                if not instance_stack: # top cell
-                    if log:
-                        F.write(f"{(count-1)*'  '}END PATH {path} IN CELL '{nbs_up[0].cnode.cell.cell_name}' pin '{nbs_up[0].name}'\n\n")
-                    paths[path] = opt_netlist
-                    paths_endpin[path] = (tuple(instance_stack), PIN2, trackertype)
-                    path += 1
-                    start = PIN2
-                    if len(loose_ends) > 0:
-                        backtrack = True
-                        if log:
-                            F.write(f"{(count-1)*'  '}=== BACK TRACK ===\n")
+            # update the instance stack
+            instance_stack.pop()
+
+            # look at all pins connected to this pin
+            for node in self._nb_filter_geo(pin):
+                # if the node is a parent of the pin, consider that node
+                if pin.cnode.parent_cnode is node.cnode:
+                    # if the instance stack is empty, we've reached the top level
+                    if instance_stack == []:
+                        return node, instance_stack
+                    # if the instance stack is not empty, move to the parent node
                     else:
-                        end = True
+                        pin = node
 
-            else: # end of path, go back to loose ends
-                paths[path] = opt_netlist
-                paths_endpin[path] = (instance_stack, PIN2, trackertype)
-                path += 1
-                if log:
-                    F.write(f"{count*'  '}END PATH {path}: in instance '{pin2.cnode.cell.cell_name}' for pin '{pin2.name}'\n\n")
-                if len(loose_ends) > 0:
-                   backtrack = True
-                   if log:
-                       F.write(f"{(count)*'  '}=== BACK TRACK ===\n")
+        # return the updated pin and instance stack
+        return pin, instance_stack
+
+    def _is_endpoint(self, pin, endpoints, input_instance_stack=None):
+        """
+        Function to check if a pin is an endpoint. A pin is an endpoint if it or its parent pins is the same as one of
+        the endpoints, or is in a cell that is the same as one of the endpoints, or if it is in an instance that is the
+        same as one of the endpoints.
+
+        First, this functions drills all the way down the hierarchy, while storing all instances traversed. Then, this
+        drills all the way up through all the instances traversed (and possible instances provided as
+        input_instance_stack), checking at each corresponding pin whether it is an endpoint. If an endpoint is
+        encountered, this function returns True. If no endpoint is encountered in any of the instances, this function
+        returns False.
+
+        Args:
+            pin (Node): pin to check for
+            endpoints (list): list of endpoints, which can be pins, cells, or instances.
+            input_instance_stack (list): list containing a history of traversed instances
+
+        Returns:
+            True, endpoint: if the pin is an endpoint, return True and the endpoint
+            False, None: if the pin is not an endpoint, return False and None
+        """
+        # TODO consider refactoring
+
+        if endpoints is None:
+            return False, None
+
+        # if endpoints were specified, look if the pin is one of the endpoints
+        if endpoints is not None:
+
+            # convert endpoints to a list if only a single endpoint was provided
+            try:
+                len(endpoints)
+            except:
+                endpoints = [endpoints]
+
+            # for each endpoint, check if the pin is an endpoint or the pin's cell is an endpoint
+            for endpoint in endpoints:
+                # generate instance_stack if necessary
+                if input_instance_stack is None:
+                    instance_stack = []
                 else:
-                   end = True
-                break
-    if log:
-        F.close()
-        print(f"...Wrote pathfinder log '{F.name}'.")
-    return paths, paths_endpin
+                    instance_stack = input_instance_stack.copy()
 
-trace_opt = _pathfinder # for backward compatibility of tests
+                # setup for drilling down
+                if pin.cnode.instance is not None:  # instance pin start
+                    current_pin = pin
+                    instance = pin.cnode.instance
+                    instance_stack.append(instance)
+                else:  # cell pin start
+                    current_pin = pin
+
+                # drill down
+                while True:
+                    if (
+                        current_pin.cnode.instance is not None
+                    ):  # pin resides in an instance
+                        instance.C2I_nodemap = {
+                            node.up: node for node in instance.pin.values()
+                        }  # Cell2Instance mapping for the instance nodes.
+                        cell_node = (
+                            current_pin.up
+                        )  # go to corresponding cell node of current_pin before drilling down
+                    else:
+                        cell_node = current_pin
+
+                    # Do not drill down in auxiliary cells that have (by definition) no netlist function.
+                    for nb, trans in cell_node.nb_geo:
+                        if (
+                            nb.cnode.instance is not None
+                            and not nb.cnode.cell.auxiliary
+                        ):
+                            break  # found instance level below represented via node nb.
+                            # assume max *one* instance below can be connected
+                    if nb.cnode.instance is None:
+                        if (
+                            current_pin.cnode.instance is not None
+                        ):  # pin resides in an instance
+                            instance.C2I_nodemap = {
+                                node.up: node for node in instance.pin.values()
+                            }  # Cell2Instance mapping for the instance nodes.
+                            pin = (
+                                current_pin.up
+                            )  # go to corresponding cell node of current_pin before drilling down
+                        else:
+                            pin = current_pin
+
+                        break  # bottom reached, leave while loop
+                    else:
+                        current_pin = nb
+                        instance = nb.cnode.instance
+                        instance_stack.append(instance)
+
+                # next, drill up and check if any pin there is an endpoint
+                while instance_stack != []:
+                    if isinstance(endpoint, nd.Node):
+                        if pin == endpoint:
+                            return True, endpoint
+                    elif isinstance(endpoint, nd.Cell):
+                        if pin.cnode.cell.cell_name == endpoint.cell_name:
+                            instance = instance_stack[-1]
+                            return True, instance.C2I_nodemap[pin]
+                    elif isinstance(endpoint, str):
+                        if pin.cnode.cell.cell_name == endpoint:
+                            instance = instance_stack[-1]
+                            return True, instance.C2I_nodemap[pin]
+                    elif isinstance(endpoint, nd.Instance):
+                        if pin.cnode.instance == endpoint:
+                            return True, pin
+                    else:
+                        msg = f"Provided endpoint {endpoint} is not a pin, cell or instance."
+                        raise Exception(msg)
+
+                    # consider the next instance:
+                    instance = instance_stack[-1]
+                    try:
+                        pin = instance.C2I_nodemap[pin]
+                    except:
+                        break
+
+                    if isinstance(endpoint, nd.Node):
+                        if pin == endpoint:
+                            return True, endpoint
+                    elif isinstance(endpoint, nd.Cell):
+                        if pin.cnode.cell.cell_name == endpoint.cell_name:
+                            instance = instance_stack[-1]
+                            return True, instance.C2I_nodemap[pin]
+                    elif isinstance(endpoint, str):
+                        if pin.cnode.cell.cell_name == endpoint:
+                            instance = instance_stack[-1]
+                            return True, instance.C2I_nodemap[pin]
+                    elif isinstance(endpoint, nd.Instance):
+                        if pin.cnode.instance == endpoint:
+                            return True, pin
+
+                    # look at all pins connected to this pin
+                    parent_pins = []
+                    for node in self._nb_filter_geo(pin):
+                        # if the node is a parent of the pin, consider that node
+                        if (pin.cnode.parent_cnode is node.cnode
+                            and pin.x == node.x
+                            and pin.y == node.y
+                        ):
+                            # store the parent node
+                            parent_pins.append(node)
+
+                            # check if the node itself is an endpoint
+                            if node == endpoint:
+                                return True, endpoint
+                            # check if the node resides in an instance. That cell could be the endpoint
+                            elif node.cnode.instance is not None:
+                                node = node.up
+                                try:
+                                    if node.cnode.cell.cell_name == endpoint.cell_name:
+                                        return True, endpoint
+                                except:
+                                    pass
+                                # check if pin's instance is an endpoint
+                                try:
+                                    if node.cnode.instance == endpoint:
+                                        return True, endpoint
+                                except:
+                                    pass
+
+                    # if any parent pins were found, move to the first parent pin that was found
+                    if parent_pins != []:
+                        instance_stack.pop()
+                        pin = parent_pins[0]
+
+            # if none of the pins where endpoints, return false
+            return False, None
+
+    @staticmethod
+    def _nb_filter_geo(
+        start,
+    ):
+        """Yield all neighbouring nodes except for the origin, stubs and annotations.
+
+        Iterates over the neighbours in the Cell.
+
+        Args:
+            start (Node): a Node from which you want the neighbours
+
+        Yields:
+            start_nb (Node): iterator over start's filtered neighbours
+        """
+        for start_nb, _ in start.nb_geo:
+            if "org" not in start_nb.name:
+                yield start_nb
 
 
-def show_paths(
-    paths,
-    width,
-    layer,
-    stdout=False,
-    endpins=None,
-    pathfilename=None,
-    append=False,
-    paths2cell=None,
-):
-    """Show paths in the layout via a polyline.
+def pathlength(path: List[Segment], **kwargs):
+    """Returns the length of the paths
 
-    Optionally print a list of all paths and their lengths.
-
-    Args:
-
-
-    Returns:
-        None
+    The kwargs provided are fed connections if they are functions
     """
-    handles = []
-    if pathfilename is not None:
-        mode = 'a' if append else 'w'
-        handles.append(open(pathfilename, mode))
-    if stdout:
-        handles.append(sys.stdout)
-    for F in handles:
-        F.write("number of paths: {}:\n".format(len(paths)))
-        F.write(f"{'num':3}:  cellpath/pin     start/end track\n")
-        F.write(f"-------------------------------------------------\n")
-    for pathnum, path in paths.items():
-        points = []
-        #Ltot = 0
-        for i, segment in enumerate(path):
-            p1, p2, L, point, line, tracker_tup = segment
-            #Ltot += L
-            x0, y0 = point[0].xya()[:2]
-            if i> 0:
-                if (x0, y0) != points[-1]:  # avoid overlapping points that will have lelngth 0 between them.
-                    points.append((x0, y0))
-            else:
-                points.append((x0, y0))
-
-            if line is not None:
-                for (x, y) in line:
-                    #print("line", line)
-                    points.append((x0+x, y0+y))
-        try:
-            point
-        except NameError:
-            nd.logger.warning("path '{}' has no points".format(path))
-        else:
-            points.append(point[1].xya()[:2])
-            if stdout:
-                location = ''
-                if endpins is not None:
-                    tuptree, pin, tracktype = endpins[pathnum]
-                    tree = [ins.cell.cell_name for ins in tuptree]
-                    location = "{}/{}".format('/'.join(tree), pin.name)
-                for F in handles:
-                    F.write(f"{pathnum:3}:  {location}              {path[0][5][0]}/{path[-1][5][1]}\n")
-
-            #print(points, '\n')
-            if paths2cell is not None:
-                nd.cfg.cells.append(paths2cell)
-                nd.cfg.patchcell = True
-            pol1 = nd.Polyline(points, layer=pathnum+layer, width=width, pathtype=1).put(0)
-            pin1 = nd.show_pin(nd.Pin().put(points[0]), radius=2*width, width=1*width, layer=pathnum+layer)
-            pin2 = nd.show_pin(nd.Pin().put(points[-1]), radius=1.5*width, width=1.5*width, layer=pathnum+layer)
-            if paths2cell is not None:
-                nd.cfg.cells.pop()
-                nd.cfg.patchcell = False
-
-
-def print_optical_paths(paths, width, layer, stdout=True, endpins=None, pathfilename=None, append=False):
-    """Print a list of all paths and their lengths.
-
-    Returns:
-        None
-    """
-    handles = []
-    if pathfilename is not None:
-        mode = 'a' if append else 'w'
-        handles.append(open(pathfilename, mode))
-    if stdout:
-        handles.append(sys.stdout)
-    for F in handles:
-        F.write("number of paths: {}:\n".format(len(paths)))
-        F.write(f"{'num':3}: {'    length':10}   cellpath/pin     start/end track\n")
-        F.write(f"-------------------------------------------------\n")
-    for pathnum, stuff in paths.items():
-        polylines=[]
-        points = []
-        Ltot = 0
-        for i, (p1, p2, L, point, line, track_tup) in enumerate(stuff):
-            Ltot += L
-            x0, y0 = point[0].xya()[:2]
-            if i> 0:
-                if (x0, y0) != points[-1]: # avoid overlapping point that will have lelngth 0 between them.
-                    points.append((x0, y0))
-            else:
-                points.append((x0, y0))
-
-            if line is not None:
-                for (x, y) in line:
-                    #print("line", line)
-                    points.append((x0+x, y0+y))
-            if track_tup[0]!=track_tup[1]:
-                polylines.append((points,int(track_tup[0][-1])))
-                points=[points[-1]]
-        try:
-            point
-        except NameError:
-            nd.logger.warning("path '{}' has no points".format(path))
-        else:
-            points.append(point[1].xya()[:2])
-            polylines.append((points,int(track_tup[1][-1])))
-            if stdout:
-                location = ''
-                if endpins is not None:
-                    tuptree, pin, tracktype = endpins[pathnum]
-                    tree = [ins.cell.cell_name for ins in tuptree]
-                    location = "{}/{}".format('/'.join(tree), pin.name)
-                for F in handles:
-                    F.write(f"{pathnum:3}: {Ltot:10.3f}   {location}              {stuff[0][5][0]}/{stuff[-1][5][1]}\n")
-            #print(points, '\n')
-            for poly,datatype in polylines:
-                nd.Polyline(poly, layer=(pathnum+layer,datatype), width=width, pathtype=1).put(0)
-                nd.show_pin(nd.Pin().put(poly[0]), radius=2*width, width=1*width, layer=(pathnum+layer,datatype))
-                nd.show_pin(nd.Pin().put(poly[-1]), radius=1.5*width, width=1.5*width, layer=(pathnum+layer,datatype))
-
-
-def pathlength(paths, wl=1.550, pol=0, drilldown=False):
-    """Calculate the pathlength of <path>.
-
-    Note that type path (geometrical, or optical TE or optical TM) depends on
-    the tracker used to create the netlst path.
-
-    Args:
-        path (path): single path or dict op paths {num: path}.
-        wl (float): wavelength in um
-        pol (int): polarization (T0, TM=1)
-
-    Returns
-        float: optical path length of the tube
-    """
-    if not isinstance(paths, dict):
-        paths = {0: paths}
-        single = True
-    else:
-        single = False
-
-    lengthsum = []
-    for num, path in paths.items():
-        lengths = []
-        for segment in path:
-            cell = segment[0].cnode.cell
-            CM = segment[2]
-            if callable(CM):
-                CM = CM(wl, pol)
-            if CM is not None:
-                lengths.append(CM)  # TODO: check if CM is indeed for Lopt.
-            else:
-                print(f"None value path in '{cell.cell_name}'")
-        if drilldown:
-            lengthsum. append((sum(lengths), lengths))
-        else:
-            lengthsum.append(sum(lengths))
-    if single:
-        return lengthsum[0]
-    else:
-        return lengthsum
+    lengths = [
+        seg.connection(**kwargs) if callable(seg.connection) else seg.connection
+        for seg in path
+    ]
+    return sum(lengths)
 
 
 def findpath(
@@ -569,273 +1617,46 @@ def findpath(
     end_cell_name=None,
     stdout=False,
     pathfilename=None,
-    append = False,
+    append=False,
     log=False,
-    logfilename='trace.log',
+    logfilename="trace.log",
     width=2.0,
     layer=2000,
-    tracker='dis',
+    tracker="dis",
     show=True,
     paths2cell=None,
 ):
-    """Find and visualize circuit paths.
-
-    The paths contain the geometrical length between two pins.
-
-    Args:
-        start (Node): start Node to trace from
-        end (Node): not in use
-        stdout (bool): write path information to stdout (default = True)
-        pathfilename (str): optional filename for saving pathfinder results
-            (default=None)
-        append (bool): only needed if pathfilename is not None.
-            If True, ne paths are appended to the file, allowing a single file for multiple calls of pathfinder.
-            Default is False
-        log (bool): generate log file of complete trace
-        logfilename (str): filename of logfile
-        width (float); width of the polyline visualizing the path in gds
-        layer (int): start gds layer number to visualize the paths in gds.
-            Path polylines will be placed in sequential layer numbers
-        trackertype (str): Type of connection to trace at the beginning.
-            Default is 'dis' (distance)
-        show (bool):
-        paths2cell: optional Cell object to place the traces in (Default is the active cell).
-
-    Returns:
-        dict: {path #: [sections] }, section = (Node1, Node2, length, (trackertype, trackertype))
     """
-    global path
-    path = 0
-    if stdout:
-        print("start pin: {}.{}".format(start.cnode.cell.cell_name, start.name))
-    paths, paths_endpin = _pathfinder(
-        start=start,
-        end=end,
-        end_cell_name=end_cell_name,
-        log=log,
-        logfilename=logfilename,
-        tracker=tracker,
+    Old function that should not be used anymore. This version will raise a warning to inform the user that the
+    new wrapper should be used instead.
+
+    The behaviour is simular to the old one, in the sense that it returns a list of segments for each path
+
+    Raises an error when called.
+    """
+    nd.logger.error(
+        "Findpath function is deprecated and will be removed. Use the class Paths() instead."
     )
-    #print_endpins(paths_endpin)
-    if show:
-        show_paths(
-            paths,
-            width=width,
-            layer=layer,
-            endpins=paths_endpin,
-            pathfilename=pathfilename,
-            append=append,
-            stdout=stdout,
-            paths2cell=paths2cell,
-        )
 
-    return paths
+    paths = Paths(
+        start,
+        endpoints=end or end_cell_name,
+        logfilename=logfilename,
+        logging_level=0,
+        reverse=False,
+        trackertype=tracker,
+        instance_stack=None,
+        tracker_kwargs=None,
+    )
 
+    paths.show_paths(
+        layer_number=layer,
+        width=width,
+        paths2cell=paths2cell,
+    )
 
-def path2lyp(
-    start,
-    end=None,
-    stdout=True,
-    pathfilename=None,
-    append=False,
-    log=False,
-    logfilename='trace.log',
-    width=2.0,
-    layer=2000,
-    tracker='dis',
-    separate_pol=False,
-    group_colors=False,
-    wl=None,
-    pol=None,
-):
-    """Find and visualize circuit paths in Klayout.
-
-    This version of pathfinder creates a dedicated lyp file for better visualization of the paths
-    The layer name in the lyp file is generated from the remarks in starting and ending pins.
-    The paths contain the geometrical length between two pins.
-
-    Args:
-        start (Node or list of Nodes): start Node(s) to trace from
-        end (Node): not in use
-        stdout (bool): write path information to stdout (default = True)
-        pathfilename (str): optional filename for saving pathfinder results
-            (default=None)
-        append (bool): only needed if pathfilename is not None.
-            If True, ne paths are appended to the file, allowing a single file for multiple calls of pathfinder
-            Default is False
-        log (bool): generate log file of complete trace
-        logfilename (str): filename of logfile
-        width (float); width of the polyline visualizing the path in gds
-        layer (int): start gds layer number to visualize the paths in gds.
-            Path polylines will be placed in sequential layer numbers
-        trackertype (str): Type of connection to trace at the beginning.
-            Default is 'dis' (distance)
-        separate_pol (bool): if True, paths of different modes are marked with a different layer. Default is True
-        group_colors (bool): if True, paths with the same staring and ending remark and same length are visualized with the same color.
-            Useful if multiple balanced path exists.
-
-    Returns:
-        dict: Dictionary containing some information on the paths
-    """
-    # if tracker != 'dis':
-    #     nd.main_logger(
-    #         "path2lyp not implemented for tracker = '{tracker}', switching to 'dis'.",
-    #         "warning",
-    #     )
-    #     tracker = 'dis'
-    if pol is None:
-        pol = nd.sim.pol
-    if wl is None:
-        wl = nd.sim.wl
-
-    if isinstance(start, list):
-        pass
-    else:
-        start=[start]
-
-    color_dic={}
-
-    if group_colors and separate_pol:
-        nd.logger.warning(f"From path2Lyp: group_colors=True not available with separate_pol=True")
-
-    paths = {}
-    paths_endpin={}
-    for j,start_pin in enumerate(start):
-        new_paths, new_paths_endpin = _pathfinder(
-            start_pin,
-            end=end,
-            log=log,
-            logfilename=f'{logfilename}.{j}',
-            tracker=tracker,
-        )
-        paths.update(new_paths)
-        paths_endpin.update(new_paths_endpin)
-
-        for i, end in new_paths_endpin.items():
-            length = 0
-            try:
-                for path in new_paths[i]:
-                    cell = path[0].cnode.cell
-                    CM = path[2]
-                    if callable(CM):
-                        CM = CM(wl, pol)
-                    if CM is not None:
-                        length += CM  # TODO: check if CM is indeed for Lopt.
-                    else:
-                        print(f"None value path in '{cell.cell_name}'")
-                path_id = str((start_pin.remark, tracker, end[1].remark,end[2], f'{length:.3f}'))
-                if stdout:
-                    print(f'{i} : {str(start_pin.remark):20s} ({tracker:4s}) --> {str(end[1].remark):20s} ({end[2]:4s}) : {length:10.2f}')
-                if separate_pol:
-                    max_pol = max([int(x[-1]) for path in new_paths[i] for x in path[5]])
-                    for j in range(max_pol + 1):
-                        nd.add_layer(
-                            name=f'Path{i:03} pol{j} : {str(start_pin.remark):20s} ({tracker:4s}) --> {str(end[1].remark):20s} ({end[2]:4s}) : {length:10.2f}',
-                            layer=(layer+i,j),
-                            dither_pattern=f'I{j}',
-                        )
-                else:
-                    lay_name=f'Path{i:03} : {str(start_pin.remark):20s} ({tracker:4s}) --> {str(end[1].remark):20s} ({end[2]:4s}) : {length:10.2f}'
-                    if path_id in color_dic:
-                        nd.add_layer(
-                            name=lay_name,
-                            layer=(layer + i, 0),
-                            fill_color=color_dic[path_id],
-                            frame_color=color_dic[path_id]
-                        )
-                    else:
-                        nd.add_layer(name=lay_name, layer=(layer + i, 0))
-                        if group_colors:
-                            color_dic[path_id] = cfg.colors.loc[cfg.colors["name"].str.contains(f'Path{i:03}')]['fill_color'].values[0]
-            except KeyError:
-                print(i, end)
-                nd.add_layer(name='Path%03i' % (i), layer=(3000 + i, 0))
-
-    path_colors=cfg.colors[cfg.colors["name"].str.contains("Path")]
-    #path_colors['width']=3
-    path_colors.loc[:,'width']=3
-    nd.nazca2csv(path_colors, 'path_colors.csv')
-    nd.csv2lyp({'Paths': 'path_colors.csv'}, 'path_colors.lyp')
-    if separate_pol:
-        print_optical_paths(
-            paths=paths,
-            width=width,
-            layer=layer,
-            stdout=False,
-            endpins=paths_endpin,
-            pathfilename=pathfilename,
-            append=append,
-        )
-    else:
-        show_paths(
-            paths=paths,
-            width=width,
-            layer=layer,
-            stdout=False,
-            endpins=paths_endpin,
-            pathfilename=pathfilename,
-            append=append,
-        )
-
-    return paths, paths_endpin
+    return paths.segments
 
 
-if __name__ == '__main__':
-    from nazca.interconnects import Interconnect
-    ic = Interconnect(radius=10)
-
-    def splitter_1x2():
-        """Mimmic a 1x2 power splitter for testing."""
-        with nd.Cell('splitter', autobbox=True) as C:
-            p1 = nd.Pin('a0').put(0, 0, 180)
-            p2 = nd.Pin('b0').put(30, 10, 0)
-            p3 = nd.Pin('b1').put(15, -4, 0)
-            sb1 = ic.sbend_p2p(p1.rot(180), p2.rot(180)).put()
-            sb2 = ic.sbend_p2p(p1.rot(180), p3.rot(180)).put()
-            nd.connect_path(p1, p2, sb1.length_geo)
-            nd.connect_path(p1, p3, sb2.length_geo)
-            nd.put_stub()
-        return C
-
-    def splitter_2x2():
-        """Mimmic a 2x2 power splitter for testing."""
-        with nd.Cell('splitter2', autobbox=True) as C:
-            p1 = nd.Pin('a0').put(0, 10, 180)
-            p2 = nd.Pin('a1').put(0, -6, 180)
-            p3 = nd.Pin('b0').put(30, 10, 0)
-            p4 = nd.Pin('b1').put(30, -4, 0)
-            sb1 = ic.sbend_p2p(p1.rot(180), p3.rot(180)).put()
-            sb2 = ic.sbend_p2p(p1.rot(180), p4.rot(180)).put()
-            sb3 = ic.sbend_p2p(p2.rot(180), p3.rot(180)).put()
-            sb4 = ic.sbend_p2p(p2.rot(180), p4.rot(180)).put()
-            nd.connect_path(p1, p3, sb1.length_geo)
-            nd.connect_path(p1, p4, sb2.length_geo)
-            nd.connect_path(p2, p3, sb3.length_geo)
-            nd.connect_path(p2, p4, sb4.length_geo)
-            nd.connect_path(p1, p2, 10)
-            nd.connect_path(p3, p4, 8)
-            nd.put_stub()
-        return C
-
-    with nd.Cell('TEST') as C:
-        b1 = nd.bend().put(flip=True)
-        sp0 = splitter_1x2().put()
-        sp1 = splitter_1x2().put('b1', flip=True)
-        sp2 = splitter_1x2().put(sp1.pin['a0'])
-        sp3 = splitter_2x2().put()
-        splitter_1x2().put()
-        sp5 = splitter_2x2().put()
-        ic.bend_strt_bend_p2p(sp5.pin['a1'], sp5.pin['b1'], ictype='ll').put()
-
-        nd.Pin('a0', pin=b1.pin['a0']).put()
-        print("\nPath from cell:")
-        findpath(start=C.pin['a0'], log=True, pathfilename='paths.log',
-            logfilename='trace_cell.log')
-
-
-    c = C.put(0, 0, 90)
-    path = 0
-    print("\nPath from instance:")
-    findpath(start=c.pin['a0'], log=True, logfilename='trace_inst.log', layer=3000)
-
-    nd.export_gds(clear=False)
+if __name__ == "__main__":
+    pass

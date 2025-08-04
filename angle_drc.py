@@ -34,7 +34,7 @@ import nazca as nd
 drc_filename = 'drc.log'
 blocklist_filename = 'bblist.log'
 
-items = [] # DRC items
+drc_items = [] # DRC items
 blocks = [] # versioned building blocks
 
 
@@ -54,7 +54,7 @@ def drc_angle(cellname, rules, flip_state, xya, flip):
     Returns:
         None
     """
-    global cnt, items, drclog
+    global cnt, drc_items, drclog
     x, y, a = xya
     msg = ''
     if flip_state is None:
@@ -78,8 +78,8 @@ def drc_angle(cellname, rules, flip_state, xya, flip):
                 valuesOK = True
                 break
         if not valuesOK:
-            msg += "      angle {:4f}{}not in allowed values: {} {}\n".\
-                format(a, flip_txt, values, flip_state_txt)
+            msg += "Allowed values: {} {}".\
+                format(flip_txt, values, flip_state_txt)
 
     domains = rules.get('domains', None)
     if domains is not None:
@@ -90,23 +90,24 @@ def drc_angle(cellname, rules, flip_state, xya, flip):
                 msg = ''
                 break
         if not domainsOK:
-            msg += "      angle {:4f}{}not in allowed domains: {} {}\n".\
-                format(a, flip_txt, domains, flip_state_txt)
+            msg += "Allowed domains: {} {}.".\
+                format(flip_txt, domains, flip_state_txt)
 
     if (not domainsOK and values is None)\
             or (not valuesOK and domains is None)\
             or (not domainsOK and not valuesOK):
         cnt += 1
-        items.append((cnt, cellname, xya, flip, msg))
-        msg = "#{} cell '{}' @ ({:.3f}, {:.3f}, {:.3f}), flip={}\n".\
-            format(str(cnt).zfill(4), cellname, x, y, a, flip) + msg
+        drc_items.append((cnt, cellname, xya, flip, msg))
+        msg = "Angle {:0.3f} not allowed in cell '{}' @ ({:.3f}, {:.3f}, {:.3f}), flip={}. ".\
+            format(a, cellname, x, y, a, flip) + msg
         #drclog.write(msg)
-        for line in msg.split('\n'):
-            if len(line) > 0:
-                nd.logger.error(line)
+        #for line in msg.split('\n'):
+        #if len(line) > 0:
+        nd.main_logger(msg, "error")
 
-def angle_drc(cell, rules=None, basename=None, version_layer=None):
-    """Apply intantiation DRC rules to cell hierarchy and scan for black boxes.
+
+def run_angle_drc(cell, rules=None, basename=None, version_layer=None, inplace=False):
+    """Apply instantiation DRC rules to cell hierarchy and scan for black boxes.
 
     The format of angle DRC rules:
 
@@ -115,11 +116,18 @@ def angle_drc(cell, rules=None, basename=None, version_layer=None):
         <cell_basename>:
           'noflip': # optional level if flip state has to be False
             'values': <list of allowed angles>
-            'domain': <list allowed domains>
+            'domain': <list allowed angle value domains>
           'flip': # optional level if flip state has to be True
             'values': <list of allowed angles>
-            'domain': <list allowed domains>111
+            'domain': <list allowed angle value domains>
       }
+
+    Args:
+        cell (Cell): cell (and subcells) to rundrc on
+        rules (dict): drc rules for instantiation
+        basename (str):
+        version_layer (layer): layer containing the cell's version annotation
+        inplace (bool): add drc gds results to <cell>.
 
     Example::
 
@@ -134,28 +142,25 @@ def angle_drc(cell, rules=None, basename=None, version_layer=None):
           'values': [0]
           'domains': [[150, 210]]
       }
-    instance_drc(rules=somerules, cell=<your Cell>)
+    angle_drc(rules=somerules, cell=<your top-Cell>)
 
-    Args:
-        rules (dict): drc rules for instantiation
-        cell (Cell): cell (and subcells) to rundrc on
-        version_layer (layer): layer containing the cell's version annotation
 
     Returns:
-        Cell: cell with angle DRC result to overlay with the gds design.
+        Cell: cell with angle DRC result to overlay with the gds design (top/mask cell).
     """
-    global cnt, drclog, items
+    global cnt, drclog, drc_items
 
+    drc_items = []
     if basename is None:
         basename = "{}".format(cell.cell_name)
 
     if rules is None:
         rules = nd.cfg.drc_instance_angle
 
-    if version_layer is None:
-        nd.logger.warning('version layer missing. Will not create a black box overview.')
-    else:
-        version_layer = nd.get_layer(version_layer)
+    #if version_layer is None:
+    #    nd.logger.warning('version layer missing. Will not create a black box overview.')
+    #else:
+    #    version_layer = nd.get_layer(version_layer)
     cnt = 0
 
     #drclogname = os.path.join(basename+'.'+drc_filename)
@@ -197,42 +202,42 @@ def angle_drc(cell, rules=None, basename=None, version_layer=None):
 
                 elif flip and angle_rules_flip is None and angle_rules_noflip is not None:
                     cnt += 1
-                    msg = "  flip=True not allowed\n"
-                    items.append((cnt, name, [x, y, a], flip, msg))
-                    msg = "#{} ERROR cell '{}' @ ({:.3f}, {:.3f}, {:.3f}), flip={}\n{}".\
-                        format(str(cnt).zfill(4), name, x, y, a, flip, msg)
+                    msg = "  flip=True not allowed. "
+                    drc_items.append((cnt, name, [x, y, a], flip, msg))
+                    msg = "cell '{}' @ ({:.3f}, {:.3f}, {:.3f}), flip={}; {}".\
+                        format(name, x, y, a, flip, msg)
                     #drclog.write(msg)
-                    nd.logger.error(msg)
+                    nd.main_logger(msg, "error")
 
                 elif not flip and angle_rules_noflip is None and angle_rules_flip is not None:
                     cnt += 1
-                    msg = "  flip=False not allowed\n"
-                    items.append((cnt, name, [x, y, a], flip, msg))
-                    msg = "#{} ERROR cell '{}' @ ({:.3f}, {:.3f}, {:.3f}), flip={}\n{}".\
-                        format(str(cnt).zfill(4), name, x, y, a, flip, msg)
+                    msg = "  flip=False not allowed. "
+                    drc_items.append((cnt, name, [x, y, a], flip, msg))
+                    msg = "cell '{}' @ ({:.3f}, {:.3f}, {:.3f}), flip={}; {}".\
+                        format(name, x, y, a, flip, msg)
                     #drclog.write(msg)
-                    nd.logger.error(msg)
+                    nd.main_logger(msg, "error")
 
                 elif rules != {}:
                     drc_angle(name, rules=rules, flip_state=None, xya=[x, y, a], flip=flip)
                 break # only the first hit (longest match of a cell in reversed ordered bb is the match
-    nd.logger.info("angle violation items found: {}".format(cnt))
-    #drclog.write("items found: {}".format(cnt))
-    #drclog.close()
-    #nd.logger.info("exported {}".format(drclogname))
+    #nd.main_logger(f"angle violation drc_items found: {cnt}.", "error")
 
     # Save DRC results as cells to gds to load on top of the design
-    with nd.Cell('{}_drc'.format(cell.cell_name)) as DRC:
-        for i in items:
-            with nd.Cell(str(i[0]).zfill(4)) as C:
-                bbox = nd.cfg.cellnames[i[1]].bbox
-                points = [(bbox[0], bbox[1]), (bbox[0], bbox[3]), (bbox[2], bbox[3]), (bbox[2], bbox[1])]
-                #print(i[1], i[2], flip, points)
-                #print(i)
-                nd.Polygon(points=points, layer=nd.cfg.drc_layer_instance_angle).put(0) # put(*i[2], flop=i[3])
-            C.put(*i[2], flip=i[3])
-    gdsname = os.path.join(basename+'.drc.gds')
-    nd.export_gds(DRC, filename=gdsname, clear=False)
+    with nd.Cell(name=f'angle_drc_{cell.cell_name}') as DRC:
+        for i in drc_items:
+            bbox = nd.cfg.cellnames[i[1]].bbox
+            points = [(bbox[0], bbox[1]), (bbox[0], bbox[3]), (bbox[2], bbox[3]), (bbox[2], bbox[1])]
+            nd.Polygon(points=points, layer=nd.cfg.drc_layer_instance_angle).put(*i[2], flop=i[3])
+    if inplace:
+        nd.cfg.patchcell = True
+        nd.cfg.cells.append(cell)
+        DRC.put(0)
+        nd.cfg.cells.pop()
+        nd.cfg.patchcell = False
+    else:
+        gdsname = os.path.join(basename+'.drc.gds')
+        nd.export_gds(DRC, filename=gdsname, clear=False)
 
     # Save manifest
     if version_layer is not None:
@@ -249,6 +254,7 @@ def angle_drc(cell, rules=None, basename=None, version_layer=None):
         nd.logger.info("exported {}".format(bblistname))
 
     return DRC
+
 
 if __name__ == '__main__':
     # example on setting design rules on instantiation
@@ -276,4 +282,4 @@ if __name__ == '__main__':
     gds = '../tests/demofab-masks/demo_example6.gds'
     mask = nd.load_gds(gds)
 
-    instance_drc(cell_rules, mask)
+    run_angle_drc(cell=mask, rules=cell_rules)

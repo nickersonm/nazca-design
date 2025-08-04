@@ -68,7 +68,7 @@ def Tp_Isolation(length=30, width=20, pinwidth=None, name='iso',
     Returns:
         function that generates a Cell object
     """
-    @bbu.hashme(name, 'length')
+    @bbu.hashme(name, ['length'])
     def cell(length=length):
         """Create an Isolation cell.
 
@@ -252,7 +252,7 @@ def Tp_CellID(width=200, length=200, ID='xx', name='Cell_ID',
     Returns:
         function that generates a Cell object
     """
-    @bbu.hashme(name, 'ID')
+    @bbu.hashme(name, ['ID'])
     def cell(ID=ID):
         """Create a Cell_ID cell.
 
@@ -275,7 +275,7 @@ def Tp_IO(length=100, width=3.5, angle=-7, pinwidth=None, name='io',
     Returns:
         function that generates a Cell object
     """
-    @bbu.hashme(name, 'length', 'angle')
+    @bbu.hashme(name, ['length', 'angle'])
     def cell(length=length, angle=angle):
         anglerad = radians(angle)
         """Create a trapezoidal IO cell.
@@ -315,7 +315,7 @@ def Tp_IOtrapezoid(length=100, width=3.5, angle=-7, pinwidth=None, name='io',
     Returns:
         function that generates a Cell object
     """
-    @bbu.hashme(name, 'length', 'angle')
+    @bbu.hashme(name, ['length', 'angle'])
     def cell(length=length, angle=angle):
         anglerad = radians(angle)
         """Create a trapezoidal IO cell.
@@ -352,7 +352,7 @@ def Tp_IO2(length=100, width=3.5, angle=7, pinwidth=None, name='io',
     Returns:
         function that generates a Cell object
     """
-    @bbu.hashme(name, 'length', 'angle')
+    @bbu.hashme(name, ['length', 'angle'])
     def cell(length=length, angle=angle):
         """Create a trapezoidal IO cell.
 
@@ -419,7 +419,7 @@ def Tp_BB3ports(length=100, width=50, pinwidth=None, name='BBname',
     Returns:
         function that generates a Cell object
     """
-    @bbu.hashme(name, 'length')
+    @bbu.hashme(name, ['length'])
     def cell(length=length):
         """Create a BB3ports cell.
 
@@ -448,7 +448,7 @@ def Tp_BB4ports(length=100, width=50, pinwidth=None, name='BBname',
     Returns:
         function that generates a Cell object
     """
-    @bbu.hashme(name, 'length')
+    @bbu.hashme(name, ['length'])
     def cell(length=length):
         """Create a BB4ports cell.
 

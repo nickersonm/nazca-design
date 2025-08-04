@@ -2,12 +2,12 @@
 # -*- coding: utf-8 -*-
 """Generic index model base class and utilities.
 
-Class IndexBase() is to be used as a parent class that defines all common 
-index model functions.  Many of them are fallback functions that should be 
-defined in the derived child index model, i.e. the child should
-defines methods as Nridge, Nsub, end Neff, be it as constants, 
-functions (like fits) or 1D or 2D solvers. The signatures of the respective
-methods shall match 
+Class IndexBase() is to be used as a parent class that defines all common
+index model functions.  Many of them are placeholder/fallback functions
+that should be defined in the derived child index model,
+i.e. the child should define the methods as Nridge, Nsub, end Neff,
+be it as constants, functions (like fits) or 1D or 2D solvers.
+The signatures of the respective methods shall match.
 
 Example:
 
@@ -17,9 +17,6 @@ Example:
         class NewIndexModel(IndexBase):
             ...
 
-It also contains a generic plot function to do a visual check for the data (plot_index).
-Furthermore, the Separator function can isolate a set of values from a list of tuples.
-
 Bright Photonics B.V. (c) 2020-2021
 """
 
@@ -27,9 +24,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 import nazca as nd
-from .version import __version__
 
-nd.logger.info("Index models version: {}".format(__version__))
+#nd.logger.info("Index models version: {}".format(nd.__version__))
 from nazca.simglobal import sim
 
 
@@ -58,14 +54,14 @@ class IndexBase:
         """
         # self.dwl = 2e-2  # step size for group index calculation in um. (Reproduce results)
         self.dwl = 1e-3  # step size for group index calculation in um. (Best results)
-        self.flagNridge = False  # store if missing Nridge() as been reported.
-        self.flagNbg = False  # store if missing Nbg() as been reported.
-        self.flagNsub = False  # store if missing Nsub() as been reported.
-        self.flagNeff = False  # store if missing Neff() as been reported.
-        self.flagdNradius = False  # store if missing dNraidus() as been reported.
-        self.flagMaxMode = False  # store if missing maxMode function has been reported.
-        self.flagModesetter = False  # store if missing modesetter() has been reported.
-        self.flagsboffset = False  # store if missing sboffset() has been reported.
+        self._flagNridge = False  # store if missing Nridge() as been reported.
+        self._flagNbg = False  # store if missing Nbg() as been reported.
+        self._flagNsub = False  # store if missing Nsub() as been reported.
+        self._flagNeff = False  # store if missing Neff() as been reported.
+        self._flagdNradius = False  # store if missing dNraidus() as been reported.
+        self._flagMaxMode = False  # store if missing maxMode function has been reported.
+        self._flagMode = False  # store if missing modesetter() has been reported.
+        self._flagsboffset = False  # store if missing sboffset() has been reported.
 
         self.properties = {
             "name": "Index Base",
@@ -77,6 +73,7 @@ class IndexBase:
 
         self.mode = 0
         self.max_mode = None
+
 
     def __str__(self):
         """Index model information.
@@ -91,15 +88,11 @@ class IndexBase:
                 out += "\n"
         return out
 
-    def setMode(self, mode):
-        """Set the desired mode to study.
 
-        NOTE: do not directly overwrite this function. This will remove the
-        check in place.
+    def mode(self, mode):
+        """Placeholder function for local mode script.
 
-        First checks if the mode is available for setting.
-        If so, execute the 'modesetter()' function, which can be overwritten
-        locally.
+        Should be overwritten in the index model.
 
         Args:
             mode (int): Waveguide mode number.
@@ -107,20 +100,18 @@ class IndexBase:
         Returns:
             None
         """
-        if mode != self.mode:
-            if self.max_mode is None:
-                self.getMaxMode()
-            if mode <= self.max_mode and mode >= 0:
-                self.mode = mode
-                self.modesetter(mode=mode)
-            else:
-                nd.main_logger(
-                    f"Mode could not be set to {mode} (Maximum mode: {self.max_mode}). "
-                    f"Using the old mode setting (mode = {self.mode}).",
-                    "error",
-                )
+        if self.isguidedmode(mode):
+            pass # set new mode
+        if not self._flagMode:
+            nd.main_logger(
+                f"Function 'modesetter' is not defined for {self.properties['name']}. "\
+                "Mode is not transferred to underlying functions.",
+                "warning",
+            )
+            self._flagMode = True
 
-    def validateModes(self, mode):
+
+    def validate_modes(self, mode):
         """Validate which modes in <modes> are existing modes.
 
         Filter out the modes below the maximum mode.
@@ -195,7 +186,7 @@ class IndexBase:
         Neff = self.Neff(wl=wl, pol=pol, width=width, radius=radius, mode=mode, **kwargs)
         Neff2 = self.Neff(wl=wl + 0.5 * self.dwl, pol=pol, radius=radius, width=width, mode=mode, **kwargs)
         Neff1 = self.Neff(wl=wl - 0.5 * self.dwl, pol=pol, radius=radius, width=width, mode=mode, **kwargs)
-       
+
         if mode is not None:
             Ngrp = {}
             for m in Neff.keys():
@@ -207,7 +198,7 @@ class IndexBase:
 # =============================================================================
 # PLACEHOLDER FUNCTIONS
 # =============================================================================
-    def getMaxMode(self):  # rename function
+    def max_mode(self):  # rename function
         """Placeholder to obtain the maximum guided mode number.
 
         Args:
@@ -226,7 +217,7 @@ class IndexBase:
         return self.max_mode
 
 
-    def modesetter(self, mode):  # rename function
+    def mode(self, mode):  # rename function
         """Placeholder function for local mode script.
 
         Should be overwritten in the index model.
@@ -237,13 +228,16 @@ class IndexBase:
         Returns:
             None
         """
-        if not self.flagModesetter:
+        if self.isguidedmode(mode):
+            pass  # set new mode
+
+        if not self._flagMode:
             nd.main_logger(
                 f"Function 'modesetter' is not defined for {self.properties['name']}. "
                 "Mode is not transferred to underlying functions.",
                 "warning",
             )
-            self.flagModesetter = True
+            self._flagMode = True
 
 
     def Neff(self, wl, pol, width, radius=0.0, mode=0):
@@ -270,12 +264,12 @@ class IndexBase:
             None
         """
 
-        if not self.flagNeff:
+        if not self._flagNeff:
             nd.main_logger(
                 "Method Neff(self, width, wl, pol) needs to be defined for ({self.properties['name']}). Returning None.",
                 "error",
             )
-        self.flagNeff = True
+        self._flagNeff = True
         return None
 
 
@@ -299,12 +293,12 @@ class IndexBase:
             float: correction on Neff for bend curvature index (default = 0.0).
         """
         # TODO: check for higher order modes separately
-        if not self.flagdNradius:
+        if not self._flagdNradius:
             nd.main_logger(
                 f"No dNradius defined for index model '{self.properties['name']}', mode={mode}. Returning 0.0.",
                 "error",
             )
-        self.flagdNradius = True
+        self._flagdNradius = True
         return 0.0
 
 
@@ -323,12 +317,12 @@ class IndexBase:
         Returns:
             None
         """
-        if not self.flagNridge:
+        if not self._flagNridge:
             nd.main_logger(
                 "Method Nridge(self, wl, pol) needs to be defined for {self.properties['name']}. Returning None.",
                 "error",
             )
-        self.flagNridge = True
+        self._flagNridge = True
         return None
 
 
@@ -347,12 +341,12 @@ class IndexBase:
         Returns:
             None
         """
-        if not self.flagNbg:
+        if not self._flagNbg:
             nd.main_logger(
                 "Method Nbg(self, wl, pol) needs to be defined for {self.properties['name']}. Returning None.",
                 "error",
             )
-        self.flagNbg = True
+        self._flagNbg = True
         return None
 
 
@@ -374,7 +368,7 @@ class IndexBase:
         Returns:
             None
         """
-        if not self.flagNsub:
+        if not self._flagNsub:
             nd.main_logger(
                 "Method Nsub(self, wl, pol) needs to be defined for {self.properties['name']}. Returning None.",
                 "error",
@@ -394,14 +388,15 @@ class IndexBase:
         Returns:
             float: straight-to-bend offset value
         """
-        if not self.flagsboffset:
+        if not self._flagsboffset:
             nd.main_logger(
                 f"Function 'modesetter' is not defined for {self.properties['name']}. "
                 "Mode is not transferred to underlying functions.",
                 "warning",
             )
-            self.flagsboffset = True
+            self._flagsboffset = True
         return 0.0
+
 
     @property
     def properties(self):
@@ -552,17 +547,17 @@ def MultiDpoly(order, xi, coef, **kwargs):
     This function generates the output of a multi-dimensional polynomial function
     based on the given order, coefficients and input parameters.
 
-    For the example having order = 2 and xi = [(x1a, x2a), (x1b, x2b), ...] 
-    the polynomial coefficients should be in the form 
-   
-    coef = [a00, a01, a02, ... a05] 
-    
+    For the example having order = 2 and xi = [(x1a, x2a), (x1b, x2b), ...]
+    the polynomial coefficients should be in the form
+
+    coef = [a00, a01, a02, ... a05]
+
     creating an output value following
-    
+
     y = a00 + a01 * x1 + a02 * x2 + a03 * x1**2 + a04 * x1 * x2 + a05 x2 **2
-    
+
     The coefficients can be calculated with e.g. sklearn.preprocessing PolynomialFeatures
-    
+
     Args:
         order (int): polynomial degree.
         xi (list of tuples): input parameters for the functions.

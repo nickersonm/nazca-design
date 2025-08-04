@@ -108,12 +108,24 @@ def os_deep(width, radius):
 # Create xsections and add standard attributes
 # If a xsection already exists it will be resued/exended
 #==============================================================================
+
+class DummyIndex:
+    def __init(self):
+        pass
+
+    def Neff(self, width=3.0, radius=0.0, wl=1.55, pol=0, mode=0):
+        if radius == 0:
+            return 3.5-0.5*pol-0.1*mode-0.5/(1+width**2)+0.5/wl**2.0
+        else:
+            return 3.5-0.5*pol-0.1*mode-0.5/(1+width**2)+1.0/(0.2*radius)+0.5/wl**2.0
+
 xsShallow = nd.add_xsection('Shallow')  # create (or reuse) a xsection object
 xsShallow.os = os_shallow  #  set straight-to-bend-offset
 xsShallow.width = 3.0  # set default width
 xsShallow.radius = 200.0  # set default radius
 xsShallow.minimum_radius = 200.0  # DRC: set minimum allowed radius
 xsShallow.taper = 50.0  #  set default taper length
+xsShallow.index = DummyIndex()
 
 xsDeep = nd.add_xsection('Deep')
 xsDeep.os = os_deep

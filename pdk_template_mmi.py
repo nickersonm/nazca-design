@@ -20,6 +20,7 @@
 
 """Module defining black box templates for PDK implementation."""
 
+from numpy import sqrt
 
 import nazca as nd
 import nazca.bb_util as bbu
@@ -165,6 +166,9 @@ def Tp_MMI1x2(length, width, pinwidth=None, offset=0,
             if icon:
                 icon(length, width).put(0)
 
+            nd.connect_path(C.pin['a0'], C.pin['b0'], 1.0/sqrt(2.0), 'ampl')
+            nd.connect_path(C.pin['a0'], C.pin['b1'], 1.0/sqrt(2.0), 'ampl')
+
         return C
     return cell
 
@@ -205,6 +209,11 @@ def Tp_MMI2x2(length, width, pinwidth=None, offset=0,
 
             if icon:
                 icon(length, width).put(0)
+
+            nd.connect_path(C.pin['a0'], C.pin['b0'], 1.0/sqrt(2.0), 'ampl')
+            nd.connect_path(C.pin['a0'], C.pin['b1'], 1.0j/sqrt(2.0), 'ampl')
+            nd.connect_path(C.pin['a1'], C.pin['b0'], -1.0j/sqrt(2.0), 'ampl')
+            nd.connect_path(C.pin['a1'], C.pin['b1'], -1.0/sqrt(2.0), 'ampl')
 
         return C
     return cell

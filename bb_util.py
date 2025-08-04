@@ -15,7 +15,7 @@
 # along with Nazca.  If not, see <http://www.gnu.org/licenses/>.
 #-----------------------------------------------------------------------
 #==============================================================================
-# (c) 2016-2019 Ronald Broeke, Katarzyna Lawniczuk
+# (c) 2016-2022 Ronald Broeke, Katarzyna Lawniczuk, Xaveer Leijtens
 #==============================================================================
 
 """Module with a set of Buiding Block templates for faciliating PDK creation."""
@@ -39,7 +39,6 @@ from nazca import cfg
 from nazca.logging import logger
 from nazca.clipper import merge_polygons
 
-#from nazca.util import parameters_to_string
 import nazca.geometries as geom
 
 
@@ -51,18 +50,59 @@ _hash_id = None
 _hash_params = {}
 _hash_name = 'NONAME'
 cfg._hashme = []
+HASH_LENGTH = 4  # number of hash characters to add to the cellname
 
 
-def hashme(*params):
-    """Decorator to not regenerate a building block (cell) based on the same parameters.
+def hashme(name="", parreprs=[], suffix=None, addhash=None, config=None):
+    """Decorator to reuse building blocks (cells) based on the same parameters.
 
+    The @hashme decorator can be used for parametrized cells.
+    It checks if a function call (that returns a Cell) occured before
+    with the same parameters. If that is the case @hashme returns a reference
+    to the previously created cell with these parameters, rather than creating
+    a full copy with a new cell name. The hashme ensures a unique cellname by
+    adding an md5 hash at the end of the cellname. Note that in gds cell the cellname
+    string is the unique identifier for referencing cells. In order to add
+    parameters to the cellname each specific parameter name must be added to "parrepr".
 
-    The @hashme decorator can be used in cases of parametrized cells.
-    It checks if a function call (that returns a CEll) occured before
-    with the same parameters.
-    If that is the case @hashme will return a
-    reference to the previously created cell with these parameters,
-    rather than creating a full copy with a new cell name.
+    Args:
+        name (str): Cell name.
+        parreprs (list of dict | list of str): list of parrepr 'parameter representations'
+            in the cellname. In case of proving a list-of-str, only the parameter names
+            shall be provided, which will automatically be translated in a dict
+            internally. A parameter entry in parreprs adds the parameter
+            to the cellname in order of appearence in parreprs.
+            Each parrepr dict describes not only if, but also how to format
+            cell parameter in the cellname. See parrepr formatting rules below.
+        config (dict): if set, overrules the default setting in cfg.hashme_config
+        suffix (str): cellname suffix. Overules 'config'.
+        addhash (bool): flag to show a hash in the cellname.
+            Overules 'addhash' setting in 'config'.
+            There maybe foundry rules that ban the use of hashme. Note that in such
+            cases the parreprs need to be used to uniquely define cell names.
+
+    The default settings for the hashme cellname formatting are set in the
+    cfg.hashme_config dict. These setting can be overruled with the "config" dict
+    in the hashme call, which has the same structure. Using the "config" keyword
+    also facilitate reuse of settings, and simplifies the "parreprs" entry.
+    Settings in parrepr overrule settings in "config".
+    Note that there can be multiple parameters per cellname, but only one "addhash"
+    and one "suffix". The config and parrepr dicts are defined as follows:
+
+        config = {
+           "prefix": <parameter specific prefix>,  # Generic prefix for the parameter value, e.g. "", "_", "_L", "_w"
+           "format": <format string>,  # parameter format, e.g. ".5f", "2.1g"
+           "func": <function(value)>,  # custom formatting function for callback, returns a string
+           "suffix": <suffix string>,  # can be overruled by "suffix" keyword in hashme.
+           "addhash": <addhash True|False>  # can be overruled by "addhash" keyword in hashme.
+        }
+
+        parrepr = {
+            "parameter": <parameter name>,  # mandatory parameter name as used in the cell call, e.g. "L", "width"
+            "prefix": <parameter specific prefix>,  # optional prefix for the parameter value, e.g. "", "_", "_L", "_w"
+            "format": <format string>,  # optional parameter format, e.g. ".5f", "2.1g"
+            "func": <function(value)>,  # optional custom formatting function for callback, returns a string
+        }
 
     Example:
 
@@ -70,7 +110,7 @@ def hashme(*params):
 
             @hashme('mycellname')
             def parametrized_cell(W, L):
-                with nd.Cell(hashme=True) as C:
+                with nd.Cell() as C:
                     # cell stuff
                     nd.strt(length=L, width=W).put()
                 return C
@@ -78,31 +118,66 @@ def hashme(*params):
             parametrized_cell(W=3.0, L=10.0)
             # cell_name ='mycellname'
 
-        Usage of hashme with adding keyword values to the cellname::
+        Usage of the hashme with adding keyword values to the cellname (default representation)::
 
-            @hashme('mycellname', 'L', 'W')
-                def parametrized_cell(W, L):
-                    with nd.Cell(hashme=True) as C:
-                        # cell stuff
-                        nd.strt(length=L, width=W).put()
-                    return C
+            @hashme('mycellname', ['L', 'W'])
+            def parametrized_cell(W, L):
+                with nd.Cell() as C:
+                    # cell stuff
+                    nd.strt(length=L, width=W).put()
+                return C
 
             parametrized_cell(W=3.0, L=10.0)
             # cell_name ='mycellname_10.0_3.0'
 
-    Parameters in the @hashme are str types.
-    The first parameter in @hashme is the cellname. The 2nd and more
-    parameters are optional names of the function call keywords.
-    If keyword names are added, the cellname will include them.
-    This is useful to add key metrics to the cell name.
-    In the decorated function the Cell creation can automatically access the
-    info created by @hashme, such as the cell name via nd.Cell(hashme=True).
+        Usage of hashme with adding keyword values to the cellname (custom representation)::
 
-    Note: do *not* use any global parameters in a paramtrized function that is
-    decorated with hashme. I.e. put all parameters that may change the cell
-    in the function call. The reason is that a change of a global parameter
+            parreprs = [
+                {"parameter": "L", "prefix": "_L"},  # Default float format: '.5g'
+                {"parameter": "W", "format": ".5g", "min_decimals": 1},  # Force a minimum number of decimals
+            ]
+            @hashme('mycellname', addhash=False, parrepr=parreprs, suffix="_end")
+            def parametrized_cell(W, L):
+                with nd.Cell() as C:
+                    # cell stuff
+                    nd.strt(length=L, width=W).put()
+                return C
+
+            parametrized_cell(W=3.0, L=10.0)
+            # cell_name = 'mycellname_L10_3.0_end'
+
+        Usage of hashme with config::
+
+            config = {
+                "prefix": "/",
+                "format": ".2g,"
+                "addhash: False",
+                "suffix": "_the_end",
+            }
+            @hashme(
+                'name=mycellname',
+                 parrepr=[
+                     {"parameter": "L", "prefix": "_L"},
+                     {"parameter": "W", "prefix": "_W"},
+                 ],
+                 config=config,
+            )
+            def parametrized_cell(W, L):
+                with nd.Cell() as C:
+                    # cell stuff
+                    nd.strt(length=L, width=W).put()
+                return C
+
+            parametrized_cell(W=3.0, L=10.0)
+            # cell_name = 'mycellname_L10_3.0_end'
+
+
+    Note: do *not* use any global parameters in a parameterized Cell function
+    that is decorated with hashme, i.e. put all parameters that may change the
+    cell in the function call. The reason is that a change of a global parameter
     could possibly cause a different result of the generated cell without
-    being noticed.
+    being noticed by the function introspection. For this reason function
+    in classes should not be decorated with @hashme.
 
     Returns:
         decorator
@@ -113,16 +188,16 @@ def hashme(*params):
 
 By default Nazca will guarantee a unique cell name each time a cell is created.
 It does so by suffixing cell names with an ordinal counter.
-This may result in multiple copies of the same cell, though,
-where only one would do.
+This may result in multiple copies of the same cell where only one would do.
+
 Decorating the cell generating function with @hashme avoids cell copies of
 identical cells by returning an existing cell if the function has been
 called with the same parameters earlier.
 
 The @hashme 'state checker' can only be used safely if the state of the
 function it decorates is *not* dependent on a state *external* to that
-function, i.e. if the variations of the cell it generates *only* depend
-on the function parameters. In contrast, Class methods typically depend
+function, i.e. only if the variations of the cell it generates *only* depends
+on the function's parameters. In contrast, Class methods typically depend
 on attributes stored at class level, hence, by their very nature Class methods
 do not fit well with the @hashme concept to guarantee unique cells for
 unique names.
@@ -137,7 +212,7 @@ Example of a cell function where @hashme should NOT be used, i.e. in a class met
 
     elm = myElement()
 
-Now compare two ways place a cell multiple times.
+Now compare two ways to place a cell multiple times.
 
 * method 1:
     elm.make_cell(a, b, c).put()
@@ -149,22 +224,47 @@ b) if @hashme is used it returns an existing cell if the call profile
 
 * method 2:
 A secure way in all cases to reuse cells is to call a cell generation function
-only once and assign its returns value -the Cell object- to a variable.
+only once and assign its returns value, i.e. the Cell object, to a variable.
 Use this variable to put instances of the cells:
 
     E = elm.cell(a, b, c)
     E.put()
     E.put()
 """
-
     #print('params:' , params)
-    Npar = len(params)
-    if Npar == 0:
-        print('warning: no name given to @hashme')
-        name = 'NONAME'
-    else:
-        name = params[0]
-        params = params[1:]
+    if config is None:
+        config = {}
+    if name == "":
+        name = _hash_name
+        print(f"warning: no cellname given to @hashme, calling it '{name}'.")
+
+    if len(parreprs) > 0:
+        if isinstance(parreprs, str):  # single string
+            parreprs = [{"parameter": parreprs}]
+        elif isinstance(parreprs, list) and isinstance(parreprs[0], str):  # list of str
+            parreprs = [{"parameter": par} for par in parreprs]
+            parreprs = parreprs
+        # TODO, check beyond item [0] may be needed:
+        elif isinstance(parreprs, list) and isinstance(parreprs[0], dict):  # list of dict, desired format
+            pass
+        else:
+            raise Exception(
+                "Hashme input variable 'parreprs' (parameter representations) should be a list-of-str or list-of-dict. "\
+                f"Current value: {parreprs}."
+            )
+
+        # Fill all values for parameter representation in the cellname:
+        for parrepr in parreprs:
+            for key in ["prefix", "format", "func"]:
+                if key not in parrepr.keys():
+                     parrepr[key] = config.get(key, cfg.hashme_config[key])
+
+    if addhash is None:
+        addhash = config.get("addhash", cfg.hashme_config['addhash'])
+    if suffix is None:
+        suffix = config.get("suffix", cfg.hashme_config['suffix'])
+    assert isinstance(addhash, bool), \
+        f"Hashme parameter 'addhash' should be a boolean. Current value: {addhash}."
 
     def decorator(cellfunc):
         """Decorator for grabbing and hashing a function's full parameter list.
@@ -184,8 +284,9 @@ Use this variable to put instances of the cells:
 
             if cfg.hashme:
                 raise Exception("Can not call an @hashme-decorated function before the Cell() call "\
-                    "inside another @hashme decorated function. Move the function call(s) after the 'with Cell()' context.")
-            hash_length = 4
+                    "inside another @hashme decorated function. Move the function call(s) after the 'with Cell()' context. "\
+                    f"Cellname: '{name}'"
+                )
             name_long = name
             getargs = inspect.getfullargspec(cellfunc)
             funcargs = getargs.args
@@ -197,59 +298,74 @@ Use this variable to put instances of the cells:
             hashstr = ''
             _hash_params = OrderedDict()
 
+            allow_kwargs = getargs.varkw is not None  # Check if kwargs can be passed to the function
+            unknown_params = list(set(kwargs.keys()) - set(funcargs))  # Check if non-defined function arguments are passed
+            if unknown_params and not allow_kwargs:
+                raise TypeError(f"{cellfunc.__name__}() got unexpected keyword argument(s) {unknown_params}")
+
             if funcargs:
-                if funcargs[0] == 'self':
+                if funcargs[0] == 'self':  # Assuming consistent use of string 'self' for class refs.
                     funcargs = funcargs[1:]
                     print(hash_class_warning)
 
                 for i, a in enumerate(funcargs):
                     if i < len(args):
                         default = args[i]
-                    elif i-delta >= 0:
-                        default = funcdefaults[i-delta]
+                    elif i - delta >= 0:
+                        default = funcdefaults[i - delta]
                     else:
                         default = None
                     _hash_params[a] = kwargs.get(a, default)
 
-                for p in params:
-                    if p in _hash_params.keys():
-                        if isinstance(_hash_params[p], float):
-                            #avoid formats like 0.0000000001 in names.
-                            name_long += "_{:.5f}".format(_hash_params[p]).rstrip('0').rstrip('.')
-                        else:
-                            name_long += "_{}".format(_hash_params[p])
+                for parrepr in parreprs:
+                    val = parrepr["parameter"]
+                    parfunc = parrepr["func"]
+                    if val in _hash_params.keys():
+                        pvalue = _hash_params[val]
+                        try:
+                            pstr = format(pvalue, parrepr["format"])
+                        except:
+                            pstr = pvalue
+                        if parfunc is not None:
+                            pstr = parfunc(pstr) # call formatting function
+                        name_long += f"{parrepr['prefix']}{pstr}"
+                    else:
+                        raise ValueError(
+                            f"Parameter '{val}' not found in function parameters {list(_hash_params.keys())}."
+                        )
 
                 for p in sorted(_hash_params.keys()):
                     hashstr += '{}_{}'.format(p, _hash_params[p])
-                _hash_id = hashlib.md5(hashstr.encode()).hexdigest()[:hash_length]
+                _hash_id = hashlib.md5(hashstr.encode()).hexdigest()[:HASH_LENGTH]
 
             else:
                 _hash_id = ''
 
-            if _hash_id != '':
-                _hash_name = "{}_${}".format(name_long, _hash_id)
+            if suffix != '':
+                name_long = f"{name_long}{suffix}"
+
+            if (_hash_id != '') and addhash:
+                _hash_name = f"{name_long}_${_hash_id}"
             else:
                 _hash_name = name_long
-
+            _hash_name = cfg.gds_cellname_cleanup(_hash_name)
             # add cfg to avoid explicit import of this module for hashme attributes
             cfg.hashme = True
             cfg.hash_id = _hash_id
-            cfg.hash_cellnameparams = params
+            cfg.hash_cellnameparams = tuple(parrepr['parameter'] for parrepr in parreprs)
             cfg.hash_params = _hash_params
             basename = cfg.gds_cellname_cleanup(name)
             cfg.hash_basename = basename                               # base
             cfg.hash_paramsname = cfg.gds_cellname_cleanup(name_long)  # base + params
-            cfg.hash_name = cfg.gds_cellname_cleanup(_hash_name)       # base + params + hash
+            cfg.hash_name = _hash_name    # base + params + hash
             cfg.hash_func_id = id(cellfunc)
 
             # check if basename comes from a unique function:
-            try:
-                funcid = cfg.basenames[basename]
-                if funcid != cfg.hash_func_id:
-                    logger.warning("Reusing a basename across function IDs: '{}'".
-                        format(basename))
-                    #raise
-            except KeyError:
+            funcid = cfg.basenames.get(basename, False)
+            if funcid:
+                if funcid != cfg.hash_func_id and cfg.check_basename:
+                    logger.warning(f"Reusing a basename across function IDs: '{basename}'")
+            else:
                 logger.debug(f"Adding basename '{basename}' to cfg.basenames")
                 if cfg.validate_basename:
                     nd.validate_basename(basename)
@@ -281,10 +397,48 @@ Use this variable to put instances of the cells:
     return decorator
 
 
+def trial_cell(func):
+    """Decorator to delete all Nazca cells generated in the decorated functions.
+
+    It will reset the cell counter to before the trial
+
+    Returns:
+        callable: wrapped function
+    """
+    def wrapper(*args, **kwargs):
+        """Wrapper function that deletes new Cells generated in its scope.
+
+        Create a trial cell to extract cell properties .
+
+        Returns:
+            Cell | float: result of wrapped function.
+        """
+        cell = kwargs.pop('cell', False)
+        if not cell:
+            S1 = set(nd.cfg.cellnames.keys())
+            num = nd.netlist.num
+        out = func(*args, cell=cell, **kwargs)
+        if not cell:
+            nd.netlist.num = num
+            S2 = set(nd.cfg.cellnames.keys())
+            for s in S2 - S1:
+                nd.cfg.cellnames.pop(s)
+        return out
+    return wrapper
+
+
 # create layers_ignore list to exclude layer from being part of bbox calculations:
 cfg.bbox_layers_ignore = []
 def bbox_layers_ignore(layers=None, reset=False):
-    """Set the layers that should be ignore in bbox calculations."""
+    """Set the layers that should be ignored in bbox calculations.
+
+    Args:
+        layers (layer): list of layers
+        reset ((bool): If True, clear existing ignore list and only set <layers>, default=False.
+
+    Returns:
+        None
+    """
     if layers is None:
         layers = []
     layerIDs = [nd.get_layer(ml) for ml in layers]
@@ -360,12 +514,12 @@ def rangecheck(allowed_values):
                     'unit': '',
                 }
                 if values['default'] is None:
-                    raise Exception(f"Value None is not allowed in rangecheck() in cell '{nd.cfg.cells[-1].cell_name}'.")
+                    raise Exception(f"Value None is not allowed in rangecheck() in cell '{nd.cfg.cells[-1].cell_name}'")
         elif not isinstance(values, dict):
             raise Exception (f"Expected type dict, not type '{type(values)}'.")
 
         if values['type'] not in cfg.allowed_vartypes:
-            err += f"vartype '{values['type']}' unknown. Allowed vartypes: '{cfg.allowed_vartypes}'\n"
+            err += f"vartype '{values['type']}' unknown. Allowed vartypes: '{cfg.allowed_vartypes}'"
         if values['min'] is None:
             values['min'] = float('-inf')
         if values['max'] is None:
@@ -373,9 +527,9 @@ def rangecheck(allowed_values):
         #if low <= value <= high:
         #    continue
         if values['default'] < values['min']:
-            err += f"{varname}={values['default']} too small. Allowed values: {values['min']}<={varname}<={values['max']}\n"
+            err += f"{varname}={values['default']} too small. Allowed values: {values['min']}<={varname}<={values['max']}"
         elif values['default'] > values['max']:
-            err += f"{varname}={values['default']} too large. Allowed values: {values['min']}<={varname}<={values['max']}\n"
+            err += f"{varname}={values['default']} too large. Allowed values: {values['min']}<={varname}<={values['max']}"
 
         # store variable info in cell for later use:
         cell = nd.cfg.cells[-1]
@@ -385,7 +539,7 @@ def rangecheck(allowed_values):
         if cfg.rangecheck:
             raise ValueError(err)
         else:
-            logger.error(err, "continuing anyway (rangecheck is set to False).\n")
+            nd.main_logger(f"{err}, continuing anyway (rangecheck is set to False).", "error")
 
     return None
 
@@ -600,14 +754,16 @@ def add_pinstyle(name, styledict):
         present = nd.cfg.pinstyle
     newstyle = present.copy()
 
-    keys = nd.cfg.pinstyle.keys()
+    #keys = nd.cfg.pinstyle.keys()
     if styledict is not None:
         for item, setting in styledict.items():
             if item in cfg.pinstylelabels:
                 newstyle[item] = setting
             else:
-                logger.warning("No valid pinstyle key  '{}' for pinstyle. Available keys: {}".\
-                    format(item, cfg.pinstylelabels))
+                nd.main_logger(
+                    f"No valid pinstyle key '{item}' for pinstyle. Available keys: {cfg.pinstylelabels}",
+                    "warning",
+                )
     nd.cfg.pinstyles[name] = newstyle
 
 
@@ -668,7 +824,7 @@ def make_pincell(layer=None, shape=None, size=None, style=None):
         layer (float): layer number to place the pin symbol/shape
         shape (str): name (dict key) of the pin symbol/shape
         size (float): scaling factor of the pin symbol/shape
-        style (str):
+        style (str): set a new pinstyle, to be overruled by other keywords, e.g. size, if provided.
 
     Returns:
         Cell: cell with pin symbol
@@ -683,7 +839,7 @@ def make_pincell(layer=None, shape=None, size=None, style=None):
         pinstyle = cfg.pinstyles[cfg.default_pinstyle]
 
     if shape is None:
-        shape_use= pinstyle['shape']
+        shape_use = pinstyle['shape']
     else:
         shape_use = shape
 
@@ -699,13 +855,13 @@ def make_pincell(layer=None, shape=None, size=None, style=None):
     #    shape_use = cfg.pinstyles[cfg.black_pinstyle]['shape']
 
     if shape_use not in cfg.pinshapes.keys():
-        mes = "arrowtype '{}' not recognized.".format(shape)
+        mes = "pinshape indentifier '{}' not recognized.".format(shape)
         mes += "Available options are: {}.".format(cfg.pinshapes.keys())
         mes += "Fall back type '{}' will be used.".format(shape_use)
         logger.warning(mes)
     shape = shape_use
 
-    name = "{}_{}_{}_{}".format('arrow', layer, shape, size)
+    name = f"arrow_{layer}_{shape}_{size}"
     name = cfg.gds_cellname_cleanup(name)
     if name in cfg.cellnames.keys():
         return cfg.cellnames[name]
@@ -735,10 +891,19 @@ def stubname(xs, width, thick, stubshape=None, pinshape=None, pinsize=None, pinl
         return cfg.gds_cellname_cleanup(name)
 
 
-missing_xs = []
-def _makestub(xs_guide=None, width=0, length=2.0, shape=None, pinshape=None,
-        pinsize=None, pinlayer=None, cell=None, pinstyle=None):
-    """Create a stub in the logical layers.
+missing_xs = []  # keep a list of encountered misssing xs to flag them only once.
+def _makestub(
+    xs_guide=None,
+    width=0,
+    length=2.0,
+    shape=None,
+    pinshape=None,
+    pinsize=None,
+    pinlayer=None,
+    cell=None,
+    pinstyle=None,
+):
+    """Create a stub cell (in the logical layers) and add it to the stub dict.
 
     A stub is the stub of a xsection shape around a pin to visualize a connection.
     A pincell is added to the stub to indicate the pin position inside the stub.
@@ -752,9 +917,10 @@ def _makestub(xs_guide=None, width=0, length=2.0, shape=None, pinshape=None,
         pinshape (string): pinshape used in the stub
         pinsize (float): scaling factor of the pinshape (default = 1)
         cell (Cell): use the provided cell as stub instead of creating a new stub cell
+        pinstyle (dict):
 
     Returns:
-        str: name of the stub
+        str: key/name of the stub
     """
     if cfg.validation_stub_xs is not None:
         xs_logic = cfg.validation_stub_xs
@@ -772,7 +938,9 @@ def _makestub(xs_guide=None, width=0, length=2.0, shape=None, pinshape=None,
             xs_logic = xs_guide
 
         if xs_guide not in cfg.XSdict.keys():
-            if xs_guide not in missing_xs:
+            if xs_guide in nd.cfg.default_xs_list:
+                nd.add_xsection(name=xs_guide, pinstyle=nd.cfg.default_xs_list[xs_guide]['pinstyle'])
+            elif xs_guide not in missing_xs:
                 missing_xs.append(xs_guide)
                 if xs_guide != cfg.default_xs_name:
                     logger.error("Can not make a stub in cell '{3}' in undefined xsection '{0}'.\n"\
@@ -833,11 +1001,29 @@ def _makestub(xs_guide=None, width=0, length=2.0, shape=None, pinshape=None,
     return name  # name can have change to default_xs
 
 
-def put_stub(pinname=None, length=None, shape='box', pinshape=None, pinsize=None,
-        pinlayer=None, pinshow=True, annotation_layer=None, pinstyle=None):
+def put_stub(
+    pinname=None,
+    length=None,
+    shape='box',
+    pinshape=None,
+    pinsize=None,
+    pinlayer=None,
+    pinshow=True,
+    annotation_layer=None,
+    pinstyle=None,
+    cell=None,
+):
     """Add a xsection stub to one or more pins.
 
-    The xsection and width of the stub is obtained from its pin attributes.
+    The pinstyle is a key poining to a dict which contains the setting for the stub.
+    These setting are overruled by the explicit keyword in the call, e.g. shape.
+
+    The method put_stub() places a stub cell (pinshape cell + stub layers) on a Node if
+    stub information (see below) has been defined for the xsection assigend to the pin.
+    If no xsection has been defined for the pin, only the pincell will the created and used.
+    If an annotation_layer is defined, the annotation is added to the parent cell.
+
+    The xsection and width of a stub are obtained from its pin attributes.
     If no attributes are set, the stub layers are empty and the stubcell
     only contains the pincell. It is possible to supply a list of pins.
 
@@ -853,29 +1039,42 @@ def put_stub(pinname=None, length=None, shape='box', pinshape=None, pinsize=None
 
     2. A cell.
 
-    For a pin having attribute xs=None only the pin is drawn.
+    For a pin having attribute xs=None, only the pin is drawn.
 
     Args:
         pinname (str | list of str | None): name(s) of the pin(s) (default = None)
             For pinname=None (default) all chain-pins will obtain a stub.
         length (float): length of the stub (thickness into cell)
-        shape (string | cell): shape of the stub 'box' | 'cirlce' (default = 'box')
+        shape (string | Cell): shape of the stub 'box' | 'cirlce' (default = 'box')
         pinshape (string): pinshape used in the stub
         pinsize (float): scaling factor of the pinshape (default = 1)
         layer (str | int | (int, int)): pin layer
         annotation_layer (str | int | (int, int)): annotation layer
-        pinstyle (str): pin style used. Default it will look in the xsection
-            pinstyle setting. f that is None the pinstyle 'default' is used
+        pinstyle (str): pin style name used to look up a dict with pinstyle settings.
+            Default it will look in the xsection pinstyle setting. If that is None
+            the pinstyle 'default' is used.
         pinshow (bool): set the pin show attribute (default=True)
+        cell (str | Cell): reference to a cell to place the stub in.
+            Default=None, which adds the stub to the active cell.
 
     Returns:
         None
     """
-    cell = cfg.cells[-1] # active cell
+    if cell is not None:
+        # add user defined cell as temporary active cell:
+        if isinstance(cell, str):
+            if cell in cfg.cellnames.keys():
+                cfg.cells.append(cfg.cellnames[cell])
+            else:
+                nd.main_logger(f"Trying to put a stub in unknown cell '{cell}'.", "error")
+        else:
+            cfg.cells.append(cell)
+        nd.cfg.patchcell = True
+    _cell = cfg.cells[-1]  # active cell
 
     # prepare pin:
     if pinname is None or pinname == []:
-        pinname = [name for name, pin in cell.pin.items() if pin.chain == 1]
+        pinname = [name for name, pin in _cell.pin.items() if pin.chain == 1]
     elif isinstance(pinname, str):
         pinname = [pinname]
     elif isinstance(pinname, nd.Node):
@@ -889,7 +1088,7 @@ def put_stub(pinname=None, length=None, shape='box', pinshape=None, pinsize=None
         stubcell = None
 
     # prepare pinstyles
-    stylestr = 'default'
+    stylestr = None  #'default'
     if cfg.validation_pinstyle is not None:
         pinstyle = cfg.validation_pinstyle
 
@@ -900,9 +1099,13 @@ def put_stub(pinname=None, length=None, shape='box', pinshape=None, pinsize=None
         logger.warning("pinstyle '{}' unknown. Using default instead. " \
               "Known pinstyles: {}".format(pinstyle, pinstylenames))
 
+    #prepare annotation layer
+    _annotation_layer = annotation_layer
+
     for p in pinname:
+        _stylestr = stylestr
         try:
-            node = cell.pin[p]
+            node = _cell.pin[p]
             node.show = pinshow # display pin name in layout and fingerprint
             if stubcell is not None: # use existing Nazca cell for stub+pin
                 name = "stub_{}".format(shape)
@@ -915,12 +1118,12 @@ def put_stub(pinname=None, length=None, shape='box', pinshape=None, pinsize=None
                     width = 0
                 else: # define stub + pin from style
                     xs = node.xs
-                    if cfg.validation_pinstyle is None:
+                    if cfg.validation_pinstyle is None and _stylestr is None:
                         xs_pinstyle = nd.get_xsection(xs).pinstyle
                         if xs_pinstyle in pinstylenames and pinstyle is None:
-                            stylestr = xs_pinstyle
+                            _stylestr = xs_pinstyle
                         else:
-                            stylestr = 'default'
+                            _stylestr = 'default'
                     if node.width is None:
                         width = 0
                     #TODO: why allow str widths here?
@@ -935,15 +1138,15 @@ def put_stub(pinname=None, length=None, shape='box', pinshape=None, pinsize=None
                         layer=pinlayer,
                         shape=pinshape,
                         size=pinsize,
-                        style=stylestr,
+                        style=_stylestr,
                     )
-                    arrow.put(node)
+                    inst = arrow.put(node)
                 else: # stub
                     if length is not None:
                         if isinstance(length, (float, int)):
                             stub_length = float(length)
                     else:
-                        stubstyle = stylestr
+                        stubstyle = _stylestr
                         if stubstyle is None:
                             stubstyle = 'default'
                         stub_length = nd.cfg.pinstyles[stubstyle].get('stub_length', 0)
@@ -957,30 +1160,35 @@ def put_stub(pinname=None, length=None, shape='box', pinshape=None, pinsize=None
                         pinshape=pinshape,
                         pinsize=pinsize,
                         pinlayer=pinlayer,
-                        pinstyle=stylestr,
+                        pinstyle=_stylestr,
                     )
 
                     # place stubs without drc check
                     drc = cfg.drc
                     cfg.drc = False
                     if node.io & 1:
-                        stubs[name].put(node.rot(180), flip=True)
+                        inst = stubs[name].put(node.rot(180), flip=True)
                     else:
-                        stubs[name].put(node.rot(180))
+                        inst = stubs[name].put(node.rot(180))
+                    inst.sourcepin = node  # for accessing pin properties for cell visualisation
                     cfg.drc = drc
 
 
-            # add annotation (keep outside of stub and pin cell):
-            if stylestr is None:
-                stylestr = 'default'
-            if annotation_layer is None:
-                annotation_layer = nd.cfg.pinstyles[stylestr]['annotation_layer']
+            # add annotation (keep outside of stub and pin cell, as these are reused for different pin names)
+            if _stylestr is None:
+                _stylestr = 'default'
+            if _annotation_layer is None:
+                annotation_layer = nd.cfg.pinstyles[_stylestr].get('annotation_layer', False)
+            else:
+                annotation_layer = _annotation_layer
             # Move the annotation location for readability
             drc = cfg.drc  # switch off drc check for annotations
             cfg.drc = False
-            nd.Annotation(layer=annotation_layer, text=p).\
-                put(node.move(*nd.cfg.pinstyles[stylestr]['annotation_move']))
-            if cfg.store_pin_attr:
+            if annotation_layer:
+                anno = nd.Annotation(layer=annotation_layer, text=p)
+                anno.put(node.move(*nd.cfg.pinstyles[_stylestr]['annotation_move']))
+                anno.sourcepin = node  # for accessing pin properties for cell visualisation
+            if cfg.store_pin_attr:  # TODO: check how this overlaps with yaml pinstyle for validation.
                 if node.type != 'bbox':
                     text = f"name: {node.name}\nwidth: {node.width}\nxs: {node.xs}\nxya: {node.fxya(digits=6)}\nflip: {node.io}\nremark: {node.remark}"
                     nd.Annotation(layer='bb_pin_attr', text=text).put(node)
@@ -988,46 +1196,49 @@ def put_stub(pinname=None, length=None, shape='box', pinshape=None, pinsize=None
 
         except Exception as E:
             mes = "Can't add stub in cell '{}' on pin '{}'.".\
-                format(cell.cell_name, p)
+                format(_cell.cell_name, p)
             logger.exception(mes)
             raise Exception(E)
+    if cell is not None:
+        nd.cfg.patchcell = False
+        cfg.cells.pop(-1)
 
 
 def validation_style(
-    on=True, 
-    stub_layer=None, 
+    on=True,
+    stub_layer=None,
     pin_style=None,
     validation_layermapmode="none",
     validation_layermap= None,
 ):
     """Set layers and pinstyle and layermap for BB validation stubs.
-    
-    Args: 
+
+    Args:
         on (bool): default=True, turn on validation style
-        stub_layer (int, (int, int), str): layer of the stub.    
+        stub_layer (int, (int, int), str): layer of the stub.
         pin_style (dict): optional pinstyle dict for the arrow and stub.
-        validation_layermapmode (str): 
+        validation_layermapmode (str):
         validation_layermap (dict): {in_layer: out_layer}
-            
+
     Returns:
         None
-    """    
+    """
     if not on:  # reset validation settings
         cfg.validation_pinstyle = None
         cfg.validation_stub_xs = None
         cfg.validation_layermapmode = "none"
         cfg.validation_layermap = None
         return None
-         
+
     if stub_layer is None:
         stub_layer = cfg.default_layers['validation_stub']
-        
+
     nd.add_xsection(name="validation_stub")
     nd.add_layer(name="validation_stub", layer=stub_layer)
     nd.add_layer2xsection(xsection="validation_stub", layer=stub_layer)
-    
+
     nd.cfg.store_pin_attr = True
-   
+
     if pin_style is None:
         validation_pinstyle = {
             'shape': 'arrow_full',
@@ -1035,20 +1246,20 @@ def validation_style(
             'layer': "bb_pin",  # use string name
             'annotation_layer': 'bbox_pin_text',  # use string name
             'annotation_move': (0, 0),
-            'stub_length': 1.0
-            }
+            'stub_length': 1.0,
+        }
         nd.add_pinstyle('validation', validation_pinstyle)
     else:
         pin_style['annotation_move'] = (0, 0)  # always force to pin location
         nd.add_pinstyle('validation', pin_style)
-    
+
     # set global parameters that for overrideing the stub xs and the pinstyle:
     cfg.validation_pinstyle = "validation"
     cfg.validation_stub_xs = "validation_stub"
 
     cfg.validation_layermapmode = validation_layermapmode
     cfg.validation_layermap = validation_layermap
-      
+
 
 def export_bb2png(cellcalls, path='', close=True, bbox_pins=True):
     """Create png image for all cells in <cellcalls>.
@@ -1512,24 +1723,38 @@ def load_gdsBB(
 
 
 def _PIL2array(img):
-    return np.array(img.getdata(), np.bool).reshape(img.size[1], img.size[0])
+    return np.array(img.getdata(), bool).reshape(img.size[1], img.size[0])
 
 
-def image(name, layer=1, size=256, pixelsize=1, threshold=0.5,
-        cellname=None, invert=False, align='cc', box_layer=None, box_buf=0):
+def image(
+    name,
+    layer=1,
+    size=256,
+    pixelsize=1,
+    threshold=0.5,
+    cellname=None,
+    invert=False,
+    align="cc",
+    box_layer=None,
+    box_buf=0,
+    merge=True,
+    bg_white=True
+):
     """Read an image file and return a nazca cell with the image.
 
     Image format can be png, jpg, gif, bpm, eps and others, as supported by Pillow.
     Note that the output resolution (size) does not exceed the image resolution.
-    Increase <pixelsize> in this case to obtain a larger logo in gds.
+    Increase <pixelsize> in this case to obtain a larger image in gds.
 
-    A rectangular box can be added around the logo by providing a <box_layer>.
+    A rectangular box can be added around the image by providing a <box_layer>.
     This box can be enlarged beyond the original image size by setting <box_buf> > 0.
 
     Args:
         name (str): name of the image file
         layer (int): layer number that the image will be written to (default 1)
-        size (int): maximum bounding box size in pixels (default 256)
+        size (int): maximum bounding box size in pixels (default 256). Setting this to
+            zero keeps the natural size of the image. This may be slow and can result
+            in a large GDS file, depending on the image size.
         pixelsize (float): pixel size in micron (default 1)
         threshold (float): black/white threshold (default 0.5)
         cellname (str): Nazca cell name (default image filename)
@@ -1541,15 +1766,20 @@ def image(name, layer=1, size=256, pixelsize=1, threshold=0.5,
             lb, cb, rb
 
         box_layer (str | int | tuple): layer reference to generate a rectangular
-            box behind the text, e.g. for tiling exclusion areas (NOFILL)
+            box behind the image, e.g. for tiling exclusion areas (NOFILL)
             (default = None)
         box_buf (float): extra buffer for the box_layer in um
+        merge (bool): merge polygons after generating image (merge is True) or leave
+            many small polygons (merge is False), which is faster but results in a
+            somewhat larger file size.
+        bg_white (bool): transparent background (if present) is interpreted as
+            white (True, default) or black (False).
 
     Returns:
         Cell: cell with image
 
     Examples:
-        Load a logo in a cell and put and/or export it to gds::
+        Load an image in a cell and put and/or export it to gds::
 
             import nazca as nd
 
@@ -1566,7 +1796,7 @@ def image(name, layer=1, size=256, pixelsize=1, threshold=0.5,
     if cellname is None:
         cellname = os.path.basename(name)
     p = pixelsize
-    threshold = int(threshold * 256)
+    threshold = int(threshold * 255)
     a = {"lb", "cb", "rb", "lc", "cc", "rc", "lt", "ct", "rt"}
     if align not in a:
         mes = "Invalid alignment specification '{}' for image '{}'.".format(align, name)
@@ -1577,10 +1807,13 @@ def image(name, layer=1, size=256, pixelsize=1, threshold=0.5,
     halign = {"l": 0, "c": -0.5, "r": -1}
     valign = {"b": 0, "c": -0.5, "t": -1}
 
-    im = Image.open(name)
-    gray = im.convert("L")
+    # Treat transparent background as white (usually good) or black.
+    im = Image.open(name).convert("RGBA")
+    new = Image.new("RGBA", im.size, "WHITE" if bg_white else "BLACK")
+    new.paste(im, mask=im)
+    gray = new.convert("L")
     # resize keep aspect, only if smaller
-    gray.thumbnail((size, size), Image.ANTIALIAS)
+    gray.thumbnail((size, size), Image.LANCZOS)
     bw = gray.point(lambda x: 0 if x < threshold else 255, "1")
     pix = _PIL2array(bw)
     width, height = bw.size
@@ -1593,6 +1826,10 @@ def image(name, layer=1, size=256, pixelsize=1, threshold=0.5,
     )
     h0 = halign[align[0]] * width_tot
     v0 = valign[align[1]] * height_tot
+    # Ensure pixel alignment on the minimum GDS grid size (default 1 nm)
+    h0 = nd.gds_base.round_to_db_unit(h0) * nd.gds_base.gds_db_user
+    v0 = nd.gds_base.round_to_db_unit(v0) * nd.gds_base.gds_db_user
+    box_buf = nd.gds_base.round_to_db_unit(box_buf) * nd.gds_base.gds_db_user
 
     polygons = []
 
@@ -1619,9 +1856,166 @@ def image(name, layer=1, size=256, pixelsize=1, threshold=0.5,
                 x1 = x0 + lb * p
                 xy = [(x0, y0), (x1, y0), (x1, y0 - p), (x0, y0 - p)]
                 polygons.append(xy)
-        for pol in nd.clipper.merge_polygons(polygons):
+        if merge:
+            if polygons:
+                polygons = merge_polygons(polygons)
+            else:
+                logger.warning(f"Resulting image is empty for '{name}'.")
+        for pol in polygons:
             nd.Polygon(points=pol, layer=layer).put()
 
+        if box_layer is not None:
+            nd.Polygon(
+                layer=box_layer,
+                points=[
+                    (0, 0),
+                    (0, height_tot),
+                    (width_tot, height_tot),
+                    (width_tot, 0),
+                ],
+            ).put(h0, v0, 0)
+    return C
+
+
+def vector_image(
+    name,
+    layer=1,
+    width=None,
+    height=None,
+    threshold=0.5,
+    cellname=None,
+    invert=False,
+    align="cc",
+    box_layer=None,
+    box_buf=0,
+    bg_white=True,
+):
+    """Read an image file and return a nazca cell with the vector image.
+
+    Image format can be png, jpg, gif, bpm, eps and others, as supported by Pillow.
+
+    A rectangular box can be added around the logo by providing a box_layer.
+    This box can be enlarged beyond the original image size by setting box_buf > 0.
+
+    Args:
+        name (str): name of the image file
+        layer (int): layer number that the image will be written to (default 1)
+        width (float): width of image. If height is not specified, the aspect ratio is
+            maintained.
+        height (float): height of image. If width is not specified, the aspect ratio is
+            maintained.
+        threshold (float): black/white threshold (default 0.5)
+        cellname (str): Nazca cell name (default image filename)
+        invert (bool): flag to invert black & white (default False)
+        align (str): two character string for image alignment (default 'cc')
+            allowed:
+            lt, ct, rt,
+            lc, cc, rc,
+            lb, cb, rb
+
+        box_layer (str | int | tuple): layer reference to generate a rectangular
+            box behind the image, e.g. for tiling exclusion areas (NOFILL)
+            (default = None)
+        box_buf (float): extra buffer for the box_layer in um
+        bg_white (bool): transparent background (if present) is interpreted as
+            white (True, default) or black (False).
+
+    Returns:
+        Cell: cell with image
+
+    Examples:
+        Load an image (typically a logo) in a cell and put and/or export it to gds::
+
+            import nazca as nd
+
+            logo = nd.vector_image('mylogo.png', align='lb') # left/bottom alignment
+            logo.put(0)
+            nd.export_gds()
+
+        or::
+
+            import nazca as nd
+
+            nd.export_gds(logo, filename='mylogo.gds')
+    """
+    if cellname is None:
+        cellname = os.path.basename(name)
+    try:
+        import potrace
+    except ModuleNotFoundError:
+        logger.warning(
+            "Can't load module 'potrace'. Function vector_image() not available.\n"
+            "Install 'pypotrace' or use (bitmap) nd.image()."
+        )
+        # Return empty cell.
+        with nd.Cell(f"{cellname}_NoVector") as C:
+            pass
+        return C
+    threshold = int(threshold * 255)
+    a = {"lb", "cb", "rb", "lc", "cc", "rc", "lt", "ct", "rt"}
+    if align not in a:
+        mes = f"Invalid alignment specification '{align}' for image '{name}'."
+        mes += f"  Allowed values are {a}."
+        mes += "  Using default value 'cc'"
+        logger.warning("\n".join(mes))
+        align = "cc"
+    halign = {"l": 0, "c": -0.5, "r": -1}
+    valign = {"b": 0, "c": -0.5, "t": -1}
+
+    # Treat transparent background as white (usually good) or black.
+    im = Image.open(name).convert("RGBA")
+    new = Image.new("RGBA", im.size, "WHITE" if bg_white else "BLACK")
+    new.paste(im, mask=im)
+    gray = new.convert("L")
+    if invert:
+        bw = gray.point(lambda x: 0 if x < threshold else 255, "1")
+    else:
+        bw = gray.point(lambda x: 0 if x >= threshold else 255, "1")
+    imwidth, imheight = bw.size
+
+    # Scalings
+    scalew, scaleh = None, None
+    if width:
+        scalew = width / imwidth
+    if height:
+        scaleh = height / imheight
+    if not scalew:
+        scalew = scaleh
+    if not scaleh:
+        scaleh = scalew
+    if not scaleh and not scalew:
+        scalew, scaleh = 1, 1
+    width = imwidth * scalew
+    height = imheight * scaleh
+    width_tot = width + 2 * box_buf
+    height_tot = height + 2 * box_buf
+    logger.info(
+        f"Generating image of {width:.0f}x{height:.0f} um2, edge is {box_buf} um."
+    )
+    h0 = halign[align[0]] * width_tot
+    v0 = valign[align[1]] * height_tot
+
+    pix = _PIL2array(bw)  # 2D numpy array
+    bmp = potrace.Bitmap(np.flipud(pix))
+    path = bmp.trace()
+    pols = []
+    sc = 1e8  # Scale to prevent rounding
+    for curve in path:
+        # Convert bezier to points, scale and move.
+        pols.append(
+            [
+                [(x * scalew) * sc, (y * scaleh) * sc]
+                for x, y in curve.tesselate(curve.adaptive)
+            ]
+        )
+    # Handle polygons with holes.
+    pols = nd.clipper._clipper2GDS(pols)  # doesn't need clipper in spite of the name
+    # Write out the polygons
+    with nd.Cell(cellname) as C:
+        for pol in pols:
+            nd.Polygon(points=[[x / sc, y / sc] for x, y in pol], layer=layer).put(
+                h0 + box_buf, v0 + box_buf, 0
+            )
         if box_layer is not None:
             nd.Polygon(
                 layer=box_layer,

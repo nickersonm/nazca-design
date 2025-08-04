@@ -192,14 +192,16 @@ def lyp2csv(lypfile, infolevel=0):
             tabs[tab] = csv_filename
             if infolevel > 0:
                 print('root:', lev1.tag)
-                print("Exported tab '{}' to file '{}'.".format(tabname, csv_filename))
+                print("Exported tab '{}' to file '{}'.".format(tab, csv_filename))
     else: # <layer-properties>
         if infolevel > 0:
             print('Single tab found')
-            tab, df = _parse_tab(lev1, infolevel=infolevel)
-            csv_filename = "{}_{}.csv".format(lypfile[:-4], tab)
-            df.to_csv(csv_filename, index=False, na_rep='')
-            tabs[tab] = csv_filename
+        tab, df = _parse_tab(root, infolevel=infolevel)
+        csv_filename = "{}_{}.csv".format(lypfile[:-4], tab)
+        df.to_csv(csv_filename, index=False, na_rep='')
+        tabs[tab] = csv_filename
+        if infolevel > 0:
+            print("Exported tab '{}' to file '{}'.".format(tab, csv_filename))
 
     return tabs
 
@@ -358,6 +360,8 @@ class Lypdata:
 def csv2lyp(csvfiles, lypfile):
     """Write klayout .lyp layer properties file.
 
+    The csv file has to be in the nazca color-table format.
+
     Args:
         csvfiles (dict): dictionary {tab-name: filename} which contains all
             csv files to be written to a single lyp file. Each tab-name is
@@ -394,12 +398,14 @@ def csv2lyp(csvfiles, lypfile):
             lyp.layer2xml(row)
         while curdepth>1:
             lyp.pop()
-            curdepth-=1            
+            curdepth-=1
         lyp.pop()
         lyp.xml_value('name', tabname)
         lyp.pop()
     lyp.output(lypfile)
 
+
+# TODO: What is different from csv2lyp
 def pd2lyp(tabs, lypfile):
     """Write klayout .lyp layer properties file.
 
@@ -444,7 +450,7 @@ def pd2lyp(tabs, lypfile):
             lyp.layer2xml(row)
         while curdepth>1:
             lyp.pop()
-            curdepth-=1            
+            curdepth-=1
         lyp.pop()
         lyp.xml_value('name', tabname)
         lyp.pop()
@@ -492,8 +498,8 @@ def nazca2csv(colors, filename):
 def nazca2lyp(filename):
     """Export the Nazca color DataFrame to .lyp file.
 
-    Generate a csv file from the Nazca color DataFrame and a lyp file
-    from that csv file
+    1. Generate a csv file from the Nazca color DataFrame
+    2. Generte a lyp file from the csv filefrom from (1)
 
     Args:
         filename (str): basename of the output csv and lyp files

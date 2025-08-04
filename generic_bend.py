@@ -35,7 +35,7 @@ The radius arguments in this module are sensitive to the sign. A positive
 radius indicates a counter-clockwise direction.
 """
 
-from scipy.optimize import fminbound, minimize_scalar
+from scipy.optimize import fminbound, minimize_scalar, root_scalar
 from math import sin, cos, radians, sqrt, log, pi
 import nazca as nd
 from nazca.util import polyline_length
@@ -93,7 +93,7 @@ def getCurvature(A, B, Lp):
             ddx += i * (i - 1) * A[i] * Lp ** (i - 2)
             ddy += i * (i - 1) * B[i] * Lp ** (i - 2)
 
-    return (ddx * dy - ddy * dx) * ((dx ** 2 + dy ** 2) ** (-1.5))
+    return (ddx * dy - ddy * dx) * ((dx**2 + dy**2) ** (-1.5))
 
 
 def invert_matrix(Lp):
@@ -107,6 +107,7 @@ def invert_matrix(Lp):
     """
     # This is the correct matrix. Please note that there is an error in the
     # original paper (entry [3, 6])
+    # fmt: off
     matrix = \
        ((        1,        0,        0  ,         0,        0,          0),
         (        0,        1,        0  ,         0,        0,          0),
@@ -114,6 +115,7 @@ def invert_matrix(Lp):
         (-10/Lp**3, -6/Lp**2,    -3/2/Lp,  10/Lp**3, -4/Lp**2,     1/2/Lp),
         ( 15/Lp**4,  8/Lp**3,  3/2/Lp**2, -15/Lp**4,  7/Lp**3,   -1/Lp**2),
         ( -6/Lp**5, -3/Lp**4, -1/2/Lp**3,   6/Lp**5, -3/Lp**4,  1/2/Lp**3))
+    # fmt: on
     return matrix
 
 
@@ -210,9 +212,9 @@ def gb_coefficients(xya, radius1=0, radius2=0):
     # Search between cartesian distance (straight line between input and
     # output) Note that this length is related to the physical length, but
     # not equal.
-    minFindL = sqrt(zout ** 2 + xout ** 2) / 4
+    minFindL = sqrt(zout**2 + xout**2) / 4
     # and 3* the length of a straight line
-    maxFindL = sqrt(zout ** 2 + xout ** 2) * 3
+    maxFindL = sqrt(zout**2 + xout**2) * 3
 
     # Calculate initial known terms
     dxin = sin(radians(thetain))
@@ -302,11 +304,16 @@ def curve2polyline(fie, xya, acc, args=()):
     # As a starting point find the value for t where the y-coordinate is
     # equal to acc. Since the curve always starts horizontal, this gives a
     # good and easy value.
+    # The value of x1 in the optimization function follows from the value of t
+    # where x is (say) ~1 µm.
     def fun(x):
-        return abs(abs(fie(x, *args)[1]) - acc)
+        return abs(fie(x, *args)[1]) - acc
 
-    res = minimize_scalar(fun, bounds=(0, 0.04), method="bounded")
-    dt0 = res.x
+    x1 = abs(1e-9 / fie(1e-9, *args)[0] * 1)  # 1 µm
+    x0 = x1 / 2
+    res = root_scalar(fun, x0=x0, x1=x1)
+    ts = res.root
+    dt0 = min(max(ts, 0), 1)  # Ensure a proper range for t.
     t0 = dt0 / 2
 
     P1 = fie(0, *args)

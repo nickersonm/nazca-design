@@ -86,6 +86,9 @@ class Package1():
         self.die_height = die_height
         self.cleave = cleave
 
+        self.DCtopname = DCtopname
+        self.DCbotname = DCbotname
+        
         self.DCside = DCside
         self.DCedge = DCedge
         self.DCpitch = DCpitch
@@ -147,8 +150,8 @@ class Package1():
 
             #DC PAD positions
             for n in range(0, IOcount):
-                pinIDT = DCtopname.format(n)
-                pinIDB = DCbotname.format(n)
+                pinIDT = self.DCtopname.format(n)
+                pinIDB = self.DCbotname.format(n)
 
                 if self.DCcenter:
                     dist_edgex = 0.5*(self.die_length -(IOcount-1)*self.DCpitch)
@@ -178,8 +181,8 @@ class Package1():
             if self.double_row_DC:
                 for ndr in range(0, IOcount-1):
                     n = ndr+IOcountmax
-                    pinIDT = DCtopname.format(n)
-                    pinIDB = DCbotname.format(n)
+                    pinIDT = self.DCtopname.format(n)
+                    pinIDB = self.DCbotname.format(n)
 
                     if self.DCcenter == True:
                         dist_edgex = self.die_length - self.cleave -\
@@ -270,7 +273,8 @@ class Package1():
                 farea = geom.box(width=self.fiberarea, length=faa_len)
                 poly = nd.Polygon(layer=fiberIOlayer, points=farea)
                 poly.put(-faa_len-0.5*self.cleave, 0.5*dist_edgey+0.5*self.fiberarea, 0)
-            else: print('Set show_fiberarea == True to see the fiber allowed area for this package.')
+            #else: 
+            #    print('Set show_fiberarea == True to see the fiber allowed area for this package.')
 
         return C
 

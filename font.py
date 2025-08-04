@@ -32,7 +32,6 @@ Example:
         nd.text(text='Hello world').put(0)
         nd.export_plt()
 """
-
 import pickle
 import warnings
 import os
@@ -42,29 +41,6 @@ from . import netlist as net
 from .util import md5
 from .cfg import default_font as default_fnt  # prevent name clash with function
 
-
-lss = 1.10  # line spacing scale
-els = 1.10  # exclusion layer scale
-
-empty_char = (  # Stub for unknown character
-    35,  # Character width
-    (
-        (
-            (0, 22.5),  # Thin rectangle with left-side opening
-            (0, 42.5),
-            (5, 42.5),
-            (5, 27.5),
-            (30, 27.5),
-            (30, 72.5),
-            (5, 72.5),
-            (5, 57.5),
-            (0, 57.5),
-            (0, 77.5),
-            (35, 77.5),
-            (35, 22.5),
-        ),
-    ),
-)
 
 # Path to this file
 modulepath = os.path.dirname(__file__)
@@ -76,7 +52,7 @@ class Font:
     Nazca font files have the following structure:
     version: font file version number
     height: total height of the font
-    space: interword space (=0 for fixed fonts)
+    space: interword space (can be 0 for fixed fonts)
 
     font: dictionary of characters:
         key: character
@@ -113,12 +89,40 @@ class Font:
         self.ff = os.path.splitext(os.path.basename(ff))[0]
         with open(ff, "rb") as f:
             self.version, self.lh, self.spc, self.tfont = pickle.load(f)
+        # Line spacing scale: same as intercharacter space or fixed ratio if the
+        # intercharacter space is zero.
+        self.lss = 1.10 if self.spc == 0 else 1 + self.spc / self.lh
+
+        # Line spacing scale: same as intercharacter space or fixed ratio if the
+        # intercharacter space is zero.
+        self.lss = 1.10 if self.spc == 0 else 1 + self.spc / self.lh
+        self.els = self.lss  # Exclusion layer scale
+        cwidth = self.tfont["O"][0]  # width of "O"
+        self.empty_char = (  # Stub for unknown character
+            cwidth,  # Character width
+            (
+                (
+                    (0, 22.5),  # Thin rectangle with left-side opening
+                    (0, 42.5),
+                    (5, 42.5),
+                    (5, 27.5),
+                    (30, 27.5),
+                    (30, 72.5),
+                    (5, 72.5),
+                    (5, 57.5),
+                    (0, 57.5),
+                    (0, 77.5),
+                    (35, 77.5),
+                    (35, 22.5),
+                ),
+            ),
+        )
 
     def textheight(self, text, height=50):
         """Returns:
         float: total textheight of line(s) in text
         """
-        return (text.count("\n") * lss + 1) * height
+        return (text.count("\n") * self.lss + 1) * height
 
     def linelength(self, text, height=50):
         """Returns:
@@ -128,7 +132,7 @@ class Font:
         maxl = 0
         for line in text.split("\n"):
             # return width of line
-            l = sum(self.tfont.get(char, empty_char)[0] for char in line) * scale
+            l = sum(self.tfont.get(char, self.empty_char)[0] for char in line) * scale
             l += (len(line) - 1) * self.spc * scale
             maxl = max(maxl, l)
 
@@ -167,8 +171,8 @@ class Font:
             instantiate (bool): instantiate cell (default=False)
             cellname (str): overrule the standard hash text cell naming (default=None)
                 Set instantiate=True to get the text as a cell in the gds export.
-            xs (str): not yet implemented. optional xsection to place text in. Useful to copy text to
-               multiple layers, e.g. a logical layer.
+            xs (str): not yet implemented. optional xsection to place text in. Useful to
+                copy text to multiple layers, e.g. a logical layer.
 
         Returns:
             Cell: cell with text as provided in <text>
@@ -190,12 +194,14 @@ class Font:
                 _x = [x for x, y in polygon]
                 height = self.lh * strokewidth / (max(_x) - min(_x))
                 print(strokewidth, self.lh, height)
-        if box_layer is None:
+        if not box_layer:
             box_layer = self.box_layer
-        if box_buf is not None:
-            box_buf = self.box_buf
-        if box_buf is None:
-            box_buf = height * (els - 1)
+
+        if not box_buf:
+            if self.box_buf:
+                box_buf = self.box_buf
+            else:
+                box_buf = height * (self.els - 1)
 
         if not isinstance(layer, (list, tuple)):
             layers = [layer]
@@ -212,7 +218,7 @@ class Font:
 
         # Character parameters
         scale = height / self.lh
-        ls = lss * height  # line spacing
+        ls = self.lss * height  # line spacing
 
         id5 = md5(text + align.lower() + "{}{}{}".format(self.ff, height, layer))
         if cellname is None:
@@ -239,7 +245,7 @@ class Font:
 
                 for char in line:
                     # w, polys = self.tfont[char]
-                    w, polys = self.tfont.get(char, empty_char)
+                    w, polys = self.tfont.get(char, self.empty_char)
                     for poly in polys:
                         XY = [(x * scale, y * scale) for x, y in poly]
                         if len(XY) > 3:
