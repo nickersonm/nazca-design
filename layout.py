@@ -34,7 +34,8 @@ from collections import defaultdict
 from math import sin, cos, radians
 from shutil import copy2
 import os
-from IPython.core.display import display, HTML
+from IPython.display import display, HTML
+
 from collections import defaultdict
 from pprint import pprint
 
@@ -50,13 +51,15 @@ from matplotlib.colors import rgb2hex
 from . import gds as gdsmod
 from . import gds_base as gbase
 from . import gds_import as gstream
-from .netlist import Netlist, Cell, Pin, Polygon, Polyline, Annotation
+from .netlist import Netlist, Cell, Pin, Polygon, Polyline, Annotation,\
+    TAB_OPEN, TAB_CLOSE, TAB_REUSE, TAB_FLAT, TAB_ELM, TAB_INST
 from .mask_layers import add_layer, get_layer, get_xsection, set_layercolor
 
 from . import cfg
 from . import util
+from . import angle_drc
 from .logging import logger
-from .polysplitter import limit_polygon_points
+from .polysplitter import limit_polygon_points, limit_polyline_points
 
 try:
     import svgwrite
@@ -917,7 +920,7 @@ class BBlock():
 #
 # Executing this file stand-alone exports a gds with all BBs in this file.
 
-from os.path import dirname
+from os.path import dirname, join
 from nazca import Cell, Pin, load_gds, export_gds, put_stub
 """.format(self.modulename, self.pyfilename)
 
@@ -938,7 +941,7 @@ from nazca import Cell, Pin, load_gds, export_gds, put_stub
         """
         indent = "    "
         # gdsfilename = os.path.join(self.bbpath, f"{self.filebasename}.gds")
-        gdsfilename = f"localdir+'/{self.filebasename}.gds'"
+        gdsfilename = f"join(localdir, '{self.filebasename}.gds')"
         cellname = topcell.cell_paramsname
         cellvar = cellname.replace(".", "_")
         self.bblockfile.write(
@@ -1151,7 +1154,8 @@ class Export_layout:
         self._svg = False
         self._plotly = False
         self.nazca = False
-        self.uPDK=False
+        self.uPDK = False
+        self.angleDRC = False
 
         self.CELL = None # only utilized when self.nazca = True
         # CELL is an attribute so it would e possible to create multiple
@@ -1501,15 +1505,17 @@ class Export_layout:
             L, D = cfg.layername2LDT[layermap][0:2]
             if self.gds:
                 if not cfg.export_polyline_as_polygon:
-                    GDS.content[level].append(
-                        gbase.gds_polyline(
-                            xy,
-                            pline.width,
-                            lay=L,
-                            datatype=D,
-                            pathtype=pline.pathtype,
+                    lines = limit_polyline_points(xy)
+                    for l in lines:
+                        GDS.content[level].append(
+                            gbase.gds_polyline(
+                                l,
+                                pline.width,
+                                lay=L,
+                                datatype=D,
+                                pathtype=pline.pathtype,
+                            )
                         )
-                    )
                 else:
                     pols = limit_polygon_points(xy)
                     for p in pols:
@@ -1532,6 +1538,7 @@ class Export_layout:
                 self.CELL.add_polyline(layer=layermap, xy=xy, width=pline.width)
         return None
 
+
     def add_annotations(self, params):
         """Add annotation content to cell.
 
@@ -1550,6 +1557,9 @@ class Export_layout:
         cell = params.cell
 
         for anno, xy in anno_iter:
+            if hasattr(anno, "sourcepin"):
+                if not anno.sourcepin.show:
+                    continue
             layermap = self.layermap[anno.layer]
             if layermap is None:
                 continue
@@ -1599,6 +1609,8 @@ class Export_layout:
                         flip=flip ^ inode.flip,
                         array=inode.array,
                         mag=inode.scale,
+                        propattr=inode.propattr,
+                        propvalue=inode.propvalue,
                     )
                 )
                 # TODO: check: for external gds files in cells named "load_gds",
@@ -1606,8 +1618,8 @@ class Export_layout:
                 # if instantiate is False on "load_gds".
                 if self.infolevel > 2:
                     print(
-                        "{}add instance '{}' @ ({:.3f}, {:.3f}, {:.3f}), instance flip={}".format(
-                            (level+1) * '. ',
+                        "{}add instance '{}' @ ({:.3f}, {:.3f}, {:.3f}), instance flip={}, array={}".format(
+                            (level+1) * TAB_INST,
                             cell.cell_name,
                             x, y, a,
                             inode.flip,
@@ -1631,9 +1643,7 @@ class Export_layout:
         """
         for gdsinfo, [x, y, a], flip in params.iters['gdsfile']:
             if self.gds:
-                filename, cellname, newcellname, layermap, cellmap, scale, strm = (
-                    gdsinfo
-                )
+                filename, cellname, newcellname, layermap, cellmap, scale, strm = gdsinfo
                 GDS.content[params.level].append(
                     gdsmod.cell_reference([x, y], newcellname, a, mag=scale, flip=flip)
                 )
@@ -1684,6 +1694,9 @@ class Export_layout:
 
         cells_visited = set()
         for topcell in topcells:
+            if self.angleDRC:
+               angle_drc.run_angle_drc(topcell, inplace=True)
+
             # initialize formats with a new output file per topcell
             if self.plt:  # separate plot for each topcell.
                 PLT.open(topcell, title=self.title, show_pins=self.show_pins)
@@ -1761,7 +1774,7 @@ class Export_layout:
         if self.uPDK:
             uPDK.footer()
 
-        if self.gds:  
+        if self.gds:
             # Save external GDS file based instances
             if self.infolevel > 0:
                 print("----\nsave external gds instances")
@@ -2005,17 +2018,17 @@ def rebuild(
     return export.CELL.topcell
 
 
-def celltree_iter(
-    cell, level=0, position=None, flat=False, cells_visited=None, infolevel=0
-):
-    """Alias for a Nelist celltree_iter2 function."""
-    return Netlist().celltree_iter2(
-        cell=cell,
-        position=position,
-        flat=flat,
-        cells_visited=cells_visited,
-        infolevel=infolevel,
-    )
+# def celltree_iter(
+#     cell, level=0, position=None, flat=False, cells_visited=None, infolevel=0
+# ):
+#     """Alias for a Nelist celltree_iter2 function."""
+#     return Netlist().celltree_iter2(
+#         cell=cell,
+#         position=position,
+#         flat=flat,
+#         cells_visited=cells_visited,
+#         infolevel=infolevel,
+#    )
 
 
 def export(
@@ -2043,7 +2056,8 @@ def export(
     md5=True,
     submit=False,
     show_pins=True,
-    hierarchy='apply'
+    hierarchy='apply',
+    angleDRC=False,
 ):
     """Export layout to gds file for all cells in <topcells>.
 
@@ -2071,6 +2085,7 @@ def export(
         bbpath (str): path to use to load a gds for bb=True generated modules (default="")
         cellmap (dict):
         show_pins (bool): show pins in the output (default=True)
+        angleDRC (bool):
 
     Returns:
         None
@@ -2079,9 +2094,9 @@ def export(
     if cfg.validation_layermapmode is not None:
         layermapmode = cfg.validation_layermapmode
     if cfg.validation_layermap is not None:
-        layermap = cfg.validation_layermap    
+        layermap = cfg.validation_layermap
     export = Export_layout(layermap=layermap, layermapmode=layermapmode)
-    
+    export.angleDRC = angleDRC
     export.submit = submit  # keep this line before export.filename in this method!
     export.filename = filename
     export.ascii = ascii

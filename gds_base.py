@@ -41,9 +41,9 @@ from nazca.logging import logger
 gds_db_unit = 0.000000001
 
 # Size of DB unit in user units (gds_db_unit / 1 um: 0.001 micron)
-gds_db_user = 0.001  
-# In Nazca the ratio db_unit / db_user has to remain 1e-6 because it has an internal 
-# of unit 1 um.
+gds_db_user = 0.001
+# In Nazca the ratio db_unit / db_user has to remain 1e-6 because it has an internal
+# unit of 1 um.
 # The gds_db_user is not really important as DBU already sets an absolute scale.
 #
 # Example:
@@ -287,7 +287,6 @@ def gds_string(string):  # Record length = 4 + strlen
         + pack_padstring(name)
     )
 
-
 def gds_layer(lay):  # Record length = 4 + 2
     return (
         pack_int16(6)
@@ -430,7 +429,7 @@ def gds_annotation(lay, xy, string, texttype=0):
 
 def gds_polyline(xy, w, lay, close=False, datatype=0, pathtype=0):
     xy_rec = gds_xy(xy, close, 2)
-    if xy_rec is None:  # Less than 2 points in closed polyline.
+    if xy_rec is None:  # Less than 2 points in polyline.
         return bytearray(b"")
     return (
         gds_path()
@@ -449,4 +448,26 @@ def gds_polygon(xy, lay, datatype=0):
         return bytearray(b"")
     return (
         gds_boundary() + gds_layer(lay) + gds_datatype(datatype) + xy_rec + gds_endel()
+    )
+
+
+def gds_propattr(counter):  # Record length = 4 + 2
+    return (
+        pack_int16(6)
+        + pack_uint8(GDS_record.PROPATTR)
+        + pack_uint8(GDS_datatype.INT16)
+        + pack_uint16(counter)
+    )
+
+
+def gds_propvalue(string):  # Record length = 4 + strlen
+    message = bytes(string, encoding="UTF-8")
+    l = len(message)
+    if l & 1:
+        l += 1
+    return (
+        pack_int16(4 + l)
+        + pack_uint8(GDS_record.PROPVALUE)
+        + pack_uint8(GDS_datatype.ASCII)
+        + pack_padstring(message)
     )

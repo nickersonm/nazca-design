@@ -21,78 +21,25 @@
 #
 import os
 import re
-from functools import partial
+from functools import partial, wraps
 from collections import OrderedDict
-from math import hypot, radians, cos, sin, sqrt
+from math import hypot, radians, cos, sin, sqrt, acos
 import hashlib
 
 import nazca as nd
 from nazca import gds_base as gbase
 from nazca.logging import logger
+from numpy import linspace, sign
 
-__all__ = [#'parameters_to_string', 'string_to_parameters',
-           'get_cell_annotation', 'get_cell_polyline', 'get_cell_polygon',
-           'make_iter', 'md5', 'isnotebook']
-
-
-#def parameters_to_string(param):
-#    """Create a string from a parameter dictionary.
-#
-#    param (dict): (parameter_name, value)
-#
-#    Format:
-#
-#    "Parameters:
-#    <parameter> = <value>
-#    <parameter> = <value>
-#    ..."
-#
-#    Returns:
-#        str: parameters as a string
-#    """
-#    plist = ['Parameters:']
-#    for key, value in param.items():
-#        plist.append("{} = {}".format(key, value))
-#    return '\n'.join(plist)
-#
-#
-#def string_to_parameters(string):
-#    """Convert a string to a parameter dictionary.
-#
-#    The returned parameter values are represented as type str.
-#
-#    Expected format of <string>:
-#
-#    "parameters:
-#    <parameter> = <value>
-#    <parameter> = <value>
-#    ..."
-#
-#    Header 'parameters:' is case incensitive and spaces will be stripped.
-#
-#    Args:
-#        string (str): parameters
-#
-#    Returns:
-#        OrderedDict: {<parameter_name>: <parameter_value>}
-#    """
-#    lines = string.split('\n')
-#    p = OrderedDict()
-#    if (lines[0].lower() == 'parameters:'):
-#        for line in lines[1:]:
-#            param = line.split('=', 1)
-#            if len(param) == 2:
-#                p[param[0].strip()] = param[1].strip()
-#            else:
-#                logger.warning("string_to_parameter: Expected one keyword "
-#                    "and one value,\nbut found instead: {}\n"
-#                    "Provided string: {}".
-#                    format(param, string))
-#    else:
-#        logger.error("string_to_parameter: "
-#            "Expected header 'parameters:'\n"
-#            "Provided string: {}".format(string))
-#    return p
+__all__ = [
+    "get_cell_annotation",
+    "get_cell_polyline",
+    "get_cell_polygon",
+    "make_iter",
+    "md5",
+    "boundingbox",
+    "isnotebook",
+]
 
 
 def get_cell_annotation(cell, convert=False):
@@ -174,7 +121,7 @@ def make_iter(x):
     if x is None:
         return tuple()
     elif type(x) is str or not hasattr(x, "__iter__"):
-        return x,
+        return (x,)
     else:
         return x
 
@@ -194,12 +141,12 @@ def md5(x, N=None):
         str: hash
     """
     if N is None:
-        return hashlib.md5('{}'.format(x).encode()).hexdigest()
+        return hashlib.md5("{}".format(x).encode()).hexdigest()
     else:
-        return hashlib.md5('{}'.format(x).encode()).hexdigest()[:N]
+        return hashlib.md5("{}".format(x).encode()).hexdigest()[:N]
 
 
-def file2md5(filename, save=True, suffix='.md5', fullpath=False):
+def file2md5(filename, save=True, suffix=".md5", fullpath=False):
     """Create a md5sum of file <filename> and optionally save to file.
 
     Args:
@@ -211,7 +158,7 @@ def file2md5(filename, save=True, suffix='.md5', fullpath=False):
     Returns:
         str: hash of file content
     """
-    with open(filename, 'rb') as F:
+    with open(filename, "rb") as F:
         data = F.read()
         md5sum = hashlib.md5(data).hexdigest()
     if save:
@@ -219,9 +166,55 @@ def file2md5(filename, save=True, suffix='.md5', fullpath=False):
             name = filename
         else:
             name = os.path.basename(filename)
-        with open(filename+suffix, 'w') as Fout:
+        with open(filename + suffix, "w") as Fout:
             Fout.write("{}  {}".format(md5sum, name))
     return md5sum
+
+
+def boundingbox(polygon):
+    """Calculate the bounding box of a polygon.
+
+    Args:
+        polygon: (list) of [x, y] pairs.
+
+    Returns:
+        (list) 4 floats: Bounding box coordinates xmin, ymin, xmax, ymax.
+    """
+    xmin, ymin = (min(point[i] for point in polygon) for i in [0, 1])
+    xmax, ymax = (max(point[i] for point in polygon) for i in [0, 1])
+    return xmin, ymin, xmax, ymax
+
+
+def signed_area(XY):
+    """Calculate and return the signed area of a polygon: negative is
+    counter_clockwise. Polygons may be open or closed, but should not self-intersect.
+
+    This is a general purpose routine. It may deviate from the area of the finally
+    drawn GDS polygon, because it does not take into account the GDS gridding.
+
+    Args:
+        XY (list): polygon, a list of (x, y) coordinates.
+
+    Returns:
+        (float): the area
+    """
+    area = 0
+    ox, oy = XY[0]
+    for x, y in XY[1:]:
+        area += x * oy - y * ox
+        ox, oy = x, y
+    area += XY[0][0] * oy - XY[0][1] * ox  # close (is zero if already closed)
+    return area / 2
+
+
+def linvarwidth(w1, w2, t):
+    """Return local width when it varies between w1 and w2 and t runs from 0 to 1."""
+    return t * (w2 - w1) + w1
+
+
+def parabolicvarwidth(w1, w2, t):
+    """Return local width when it varies between w1 and w2 and t runs from 0 to 1."""
+    return sqrt(w1 * w1 * (1 - t) + w2 * w2 * t)
 
 
 def isnotebook():
@@ -232,14 +225,14 @@ def isnotebook():
     """
     try:
         shell = get_ipython().__class__.__name__
-        if shell == 'ZMQInteractiveShell':  # Jupyter notebook or qtconsole?
+        if shell == "ZMQInteractiveShell":  # Jupyter notebook or qtconsole?
             return True
-        elif shell == 'TerminalInteractiveShell':  # Terminal running IPython?
+        elif shell == "TerminalInteractiveShell":  # Terminal running IPython?
             return False
         else:
             return False  # Other type (?)
     except NameError:
-        return False      # Probably standard Python interpreter
+        return False  # Probably standard Python interpreter
 
 
 def klayout2nazca(string):
@@ -257,8 +250,7 @@ def klayout2nazca(string):
 
         out: [(1.0, 3.5), (2.0, 5.5)]
     """
-    return [[float(x) for x in line.split('\t')]
-        for line in string.strip().split('\n')]
+    return [[float(x) for x in line.split("\t")] for line in string.strip().split("\n")]
 
 
 def _trapezoid(xy0, xy1, w0, w1):
@@ -277,12 +269,18 @@ def _trapezoid(xy0, xy1, w0, w1):
     """
     dx = xy1[1] - xy0[1]
     dy = xy0[0] - xy1[0]
-    try:
-        length = hypot(dx, dy)
+    length = hypot(dx, dy)
+    if length != 0:
         px = dx / 2.0 / length
         py = dy / 2.0 / length
-    except: # ZeroDivisionError:
-        logger.error("zero-length segment trapezoid line at ({},{}) in cell '{}'".format(xy0[0], xy0[1], nd.cfg.cells[-1].cell_name))
+    else:  # ZeroDivisionError:
+        cell = nd.cfg.cells[-1]
+        if not cell.void:
+            logger.error(
+                "zero-length segment trapezoid line at ({},{}) in cell '{}'".format(
+                    xy0[0], xy0[1], cell.cell_name
+                )
+            )
         px = py = 0
     dx0 = px * w0
     dy0 = py * w0
@@ -292,7 +290,7 @@ def _trapezoid(xy0, xy1, w0, w1):
         (xy0[0] + dx0, xy0[1] + dy0),
         (xy1[0] + dx1, xy1[1] + dy1),
         (xy1[0] - dx1, xy1[1] - dy1),
-        (xy0[0] - dx0, xy0[1] - dy0)
+        (xy0[0] - dx0, xy0[1] - dy0),
     ]
 
 
@@ -333,7 +331,7 @@ def _trapezoid_asym(xy0, xy1, w0a, w0b, w1a, w1b):
         (xy0[0] + dx0a, xy0[1] + dy0a),
         (xy1[0] + dx1a, xy1[1] + dy1a),
         (xy1[0] + dx1b, xy1[1] + dy1b),
-        (xy0[0] + dx0b, xy0[1] + dy0b)
+        (xy0[0] + dx0b, xy0[1] + dy0b),
     ]
 
 
@@ -367,7 +365,7 @@ def _intersect(xy0, xy1, xy2, xy3):
     xi = x0 + Dx / D0 * (x1 - x0)
     yi = y0 + Dx / D0 * (y1 - y0)
     # Check if intersection is in between B & C
-    lsqr = (x2 - x1)**2 + (y2 - y1)**2
+    lsqr = (x2 - x1) ** 2 + (y2 - y1) ** 2
     s = (xi - x1) * (x2 - x1) + (yi - y1) * (y2 - y1)
     if 0 < s < lsqr:  # Intersection in between B & C
         return (xi, yi)
@@ -445,8 +443,7 @@ def polyline2polygons(
     nmax = nd.cfg.maxpolygonpoints - 5
     n = len(xy)
     if n < 2:
-        raise ValueError(
-            "Polyline2polygons: need at least 2 points for polyline.")
+        raise ValueError("Polyline2polygons: need at least 2 points for polyline.")
 
     # start angle correction
     # TODO: update xy for anglei and angleo at the start.
@@ -454,23 +451,23 @@ def polyline2polygons(
     # 1/3 creates effectively 3 near-equal line segments inside the
     # original 2 of connecting elements: ---|--- -> --.-|-.--
     # with the exact angle in the middle segment and | denoting the element transition
-    factor = 1.0/3.0
+    factor = 1.0 / 3.0
     if anglei is not None:
         l0 = hypot(xy[1][0] - xy[0][0], xy[1][1] - xy[0][1])
-        xi = xy[0][0] + (l0/3.0) * cos(radians(anglei))
-        yi = xy[0][1] + (l0/3.0) * sin(radians(anglei))
+        xi = xy[0][0] + (l0 / 3.0) * cos(radians(anglei))
+        yi = xy[0][1] + (l0 / 3.0) * sin(radians(anglei))
     if angleo is not None:
-        l0 = hypot(xy[n-2][0] - xy[n-1][0], xy[n-2][1] - xy[n-1][1])
-        xo = xy[n-1][0] + factor * l0 * cos(radians(angleo+180))
-        yo = xy[n-1][1] + factor * l0 * sin(radians(angleo+180))
+        l0 = hypot(xy[n - 2][0] - xy[n - 1][0], xy[n - 2][1] - xy[n - 1][1])
+        xo = xy[n - 1][0] + factor * l0 * cos(radians(angleo + 180))
+        yo = xy[n - 1][1] + factor * l0 * sin(radians(angleo + 180))
 
     xy2 = []
     for i, point in enumerate(xy):
-        if i == N-1 and angleo is not None:
+        if i == N - 1 and angleo is not None:
             n += 1
             xy2.append((xo, yo))
         xy2.append(point)
-        #print(point)
+        # print(point)
         if i == 0 and anglei is not None:
             n += 1
             xy2.append((xi, yi))
@@ -479,15 +476,16 @@ def polyline2polygons(
     if isinstance(width, list):
         width_new = []
         for i, W in enumerate(width):
-            if i == N-1 and angleo is not None:
-                width_new.append((width[N-1] + factor * (width[N-2]-width[N-1]) ))
+            if i == N - 1 and angleo is not None:
+                width_new.append(
+                    (width[N - 1] + factor * (width[N - 2] - width[N - 1]))
+                )
             width_new.append(W)
-            #print(i, W)
+            # print(i, W)
             if i == 0 and anglei is not None:
-                width_new.append((width[0] + factor * (width[1]-width[0]) ))
+                width_new.append((width[0] + factor * (width[1] - width[0])))
         width = width_new
     # end angle correction
-
 
     # TODO: check discretization of result against resolution.
 
@@ -499,14 +497,8 @@ def polyline2polygons(
     for ndx in range(1, n):
         ltot += hypot(xy[ndx][0] - xy[ndx - 1][0], xy[ndx][1] - xy[ndx - 1][1])
         length.append(ltot)
-    t = [lrun / ltot for lrun in length]  # Normalize to [0,1]
+    t = [lrun / ltot for lrun in length]  # Normalize to [0, 1]
     # Note: if there is a curvature in the polyline, "length" is a lower boundary.
-
-    def linvarwidth(w1, w2, t):
-        return t * (w2 - w1) + w1
-
-    def parabolicvarwidth(w1, w2, t):
-        return sqrt(w1 * w1 * (1 - t) + w2 * w2 * t)
 
     if isinstance(width, (int, float)) and isinstance(width2, (int, float)):
         if parabolic:
@@ -520,24 +512,27 @@ def polyline2polygons(
     if isinstance(width, (int, float)):
         # Constant width w=width
         w = [width for k in range(n)]
-        dsqrmax = [(miter * width)**2 for k in range(n)]
+        dsqrmax = [(miter * width) ** 2 for k in range(n)]
     elif isinstance(width, list):
         # List of width: should have the same length as xy
         if len(width) != n:
-            raise ValueError('Polyline2polygons: length of xy needs '
-                'to match length of width.')
+            raise ValueError(
+                "Polyline2polygons: length of xy needs " "to match length of width."
+            )
         w = width
-        dsqrmax = [(miter * w)**2 for w in width]
+        dsqrmax = [(miter * w) ** 2 for w in width]
     elif callable(width):
         # w=width(t) is a function of t.
         w = [width(x) for x in t]
         # the fraction of the width of the line segments that is used to
         # determine if a single point is sufficient to describe the outline, or
         # that two points are needed (miter limit).
-        dsqrmax = [(miter * width(x))**2 for x in t]
+        dsqrmax = [(miter * width(x)) ** 2 for x in t]
     else:
-        raise ValueError("Polyline2polygons: don't know what to do with "
-             "this width parameter: {}.".format(width))
+        raise ValueError(
+            "Polyline2polygons: don't know what to do with "
+            "this width parameter: {}.".format(width)
+        )
 
     # Start with the first two points:
     tr1 = _trapezoid(xy[0], xy[1], w[0], w[1])
@@ -551,11 +546,12 @@ def polyline2polygons(
         # Get corner points for next segment.
         tr1 = _trapezoid(xy[i], xy[i + 1], w[i], w[i + 1])
         # left or right turn
-        lrt = (xy[i + 1][1] - xy[i - 1][1]) * (xy[i][0] - xy[i - 1][0]) -\
-              (xy[i + 1][0] - xy[i - 1][0]) * (xy[i][1] - xy[i - 1][1])
+        lrt = (xy[i + 1][1] - xy[i - 1][1]) * (xy[i][0] - xy[i - 1][0]) - (
+            xy[i + 1][0] - xy[i - 1][0]
+        ) * (xy[i][1] - xy[i - 1][1])
         # Distance (squared) between the two points at the kink
         # (Top and bottom have the same distance)
-        dsqr = (tr1[0][0] - tr0[1][0])**2 + (tr1[0][1] - tr0[1][1])**2
+        dsqr = (tr1[0][0] - tr0[1][0]) ** 2 + (tr1[0][1] - tr0[1][1]) ** 2
         if lrt < 0:  # Left turn
             # Inside corner: always intersect.
             xyt.append(_intersect(tr0[0], tr0[1], tr1[0], tr1[1]))
@@ -624,9 +620,16 @@ def polyline2polygon(
     Returns:
         list of (float, float): the polygon.
     """
-    return polyline2polygons(xy=xy, width=width, width2=width2,
-            parabolic=parabolic, miter=miter, anglei=anglei, angleo=angleo,
-            split=False)[0]
+    return polyline2polygons(
+        xy=xy,
+        width=width,
+        width2=width2,
+        parabolic=parabolic,
+        miter=miter,
+        anglei=anglei,
+        angleo=angleo,
+        split=False,
+    )[0]
 
 
 def polyline2edge(
@@ -639,6 +642,7 @@ def polyline2edge(
     anglei=None,
     angleo=None,
     line=False,
+    shift=0,
 ):
     """Return a polygon that contains the outline points of a polyline with
     given width.
@@ -681,14 +685,15 @@ def polyline2edge(
     # TODO: check discretization of result against resolution.
     n = len(xy)
     if n < 2:
-        raise ValueError(
-            "Polyline2polygon: need at least 2 points for polyline.")
+        raise ValueError("Polyline2polygon: need at least 2 points for polyline.")
 
     (a1, b1), (a2, b2), c1, c2 = grow
     (a1, b1), (a2, b2) = (-a1, -b1), (-a2, -b2)
+    b1 += shift
+    b2 += shift
 
     if line:
-        position = 0.5*(a1+a2) * width1 + 0.5*(b1+b2)
+        position = 0.5 * (a1 + a2) * width1 + 0.5 * (b1 + b2)
         b1 = b2 = position
         a1 = a2 = 0
         width1 = 0
@@ -699,23 +704,23 @@ def polyline2edge(
     # 1/3 creates effectively 3 near-equal line segments inside the
     # original 2 of connecting elements: ---|--- -> --.-|-.--
     # with the exact angle in the middle segment and | denoting the element transition
-    factor = 1.0/3.0
+    factor = 1.0 / 3.0
     if anglei is not None:
         l0 = hypot(xy[1][0] - xy[0][0], xy[1][1] - xy[0][1])
-        xi = xy[0][0] + (l0/3.0) * cos(radians(anglei))
-        yi = xy[0][1] + (l0/3.0) * sin(radians(anglei))
+        xi = xy[0][0] + (l0 / 3.0) * cos(radians(anglei))
+        yi = xy[0][1] + (l0 / 3.0) * sin(radians(anglei))
     if angleo is not None:
-        l0 = hypot(xy[n-2][0] - xy[n-1][0], xy[n-2][1] - xy[n-1][1])
-        xo = xy[n-1][0] + factor * l0 * cos(radians(angleo+180))
-        yo = xy[n-1][1] + factor * l0 * sin(radians(angleo+180))
+        l0 = hypot(xy[n - 2][0] - xy[n - 1][0], xy[n - 2][1] - xy[n - 1][1])
+        xo = xy[n - 1][0] + factor * l0 * cos(radians(angleo + 180))
+        yo = xy[n - 1][1] + factor * l0 * sin(radians(angleo + 180))
 
     xy2 = []
     for i, point in enumerate(xy):
-        if i == N-1 and angleo is not None:
+        if i == N - 1 and angleo is not None:
             n += 1
             xy2.append((xo, yo))
         xy2.append(point)
-        #print(point)
+        # print(point)
         if i == 0 and anglei is not None:
             n += 1
             xy2.append((xi, yi))
@@ -724,12 +729,14 @@ def polyline2edge(
     if isinstance(width1, list):
         width_new = []
         for i, W in enumerate(width1):
-            if i == N-1 and angleo is not None:
-                width_new.append((width1[N-1] + factor * (width1[N-2]-width1[N-1]) ))
+            if i == N - 1 and angleo is not None:
+                width_new.append(
+                    (width1[N - 1] + factor * (width1[N - 2] - width1[N - 1]))
+                )
             width_new.append(W)
-            #print(i, W)
+            # print(i, W)
             if i == 0 and anglei is not None:
-                width_new.append((width1[0] + factor * (width1[1]-width1[0]) ))
+                width_new.append((width1[0] + factor * (width1[1] - width1[0])))
         width1 = width_new
     # end angle correction
 
@@ -743,12 +750,6 @@ def polyline2edge(
         length.append(ltot)
     t = [lrun / ltot for lrun in length]  # Normalize to [0,1]
 
-    def linvarwidth(w1, w2, t):
-        return t * (w2 - w1) + w1
-
-    def parabolicvarwidth(w1, w2, t):
-        return sqrt(w1 * w1 * (1 - t) + w2 * w2 * t)
-
     if isinstance(width1, (int, float)) and isinstance(width2, (int, float)):
         if parabolic:
             # parabolic width from w=width to w=width2.
@@ -760,30 +761,33 @@ def polyline2edge(
 
     if isinstance(width1, (int, float)):
         # Constant width w=width
-        wa = [width1*a1+b1 for k in range(n)]
-        wb = [width1*a2+b2 for k in range(n)]
-        dsqrmax = [(miter * width1)**2 for k in range(n)]
+        wa = [width1 * a1 + b1 for k in range(n)]
+        wb = [width1 * a2 + b2 for k in range(n)]
+        dsqrmax = [(miter * width1) ** 2 for k in range(n)]
     elif isinstance(width1, list):
         # List of width: should have the same length as xy
         if len(width1) != n:
-            raise ValueError('Polyline2polygon: length of xy needs '
-                'to match length of width.')
+            raise ValueError(
+                "Polyline2polygon: length of xy needs " "to match length of width."
+            )
         wa, wb, dsqrmax = [], [], []
         for w in width1:
-            wa.append(w*a1+b1)
-            wb.append(w*a2+b2)
-            dsqrmax.append((miter * w)**2)
+            wa.append(w * a1 + b1)
+            wb.append(w * a2 + b2)
+            dsqrmax.append((miter * w) ** 2)
     elif callable(width1):
         # w=width(t) is a function of t.
-        wa = [width1(x)*a1+b1 for x in t]
-        wb = [width1(x)*a2+b2 for x in t]
+        wa = [width1(x) * a1 + b1 for x in t]
+        wb = [width1(x) * a2 + b2 for x in t]
         # the fraction of the width of the line segments that is used to
         # determine if a single point is sufficient to describe the outline, or
         # that two points are needed (miter limit).
-        dsqrmax = [(miter * width1(x))**2 for x in t]
+        dsqrmax = [(miter * width1(x)) ** 2 for x in t]
     else:
-        raise ValueError("Polyline2polygon: don't know what to do with "
-             "this width parameter: {}.".format(width1))
+        raise ValueError(
+            "Polyline2polygon: don't know what to do with "
+            f"this width parameter: {width1}."
+        )
 
     # Start with the first two points
     tr1 = _trapezoid_asym(xy[0], xy[1], wa[0], wb[0], wa[1], wb[1])
@@ -796,13 +800,12 @@ def polyline2edge(
         # Get corner points for next segment.
         tr1 = _trapezoid_asym(xy[i], xy[i + 1], wa[i], wb[i], wa[i + 1], wb[i + 1])
         # left or right turn
-        lrt = (
-            (xy[i + 1][1] - xy[i - 1][1]) * (xy[i][0] - xy[i - 1][0]) -
-            (xy[i + 1][0] - xy[i - 1][0]) * (xy[i][1] - xy[i - 1][1])
-        )
+        lrt = (xy[i + 1][1] - xy[i - 1][1]) * (xy[i][0] - xy[i - 1][0]) - (
+            xy[i + 1][0] - xy[i - 1][0]
+        ) * (xy[i][1] - xy[i - 1][1])
         # Distance (squared) between the two points at the kink
         # (Top and bottom have the same distance)
-        dsqr = (tr1[0][0] - tr0[1][0])**2 + (tr1[0][1] - tr0[1][1])**2
+        dsqr = (tr1[0][0] - tr0[1][0]) ** 2 + (tr1[0][1] - tr0[1][1]) ** 2
 
         if not line and lrt > 0:  # Left turn
             # Inside corner: always intersect.
@@ -833,6 +836,115 @@ def polyline2edge(
     else:
         return xyt + list(reversed(xyb))
 
+
+def arc2polygon(radius, angle, width1, width2=None, accuracy=0.001, parabolic=True):
+    """Return polygon representation of an arc with width starting at width1 and ending
+    at width2. The polygon outline is never more away from the ideal geometric shape than
+    the value of the specified accuracy. The polygon is constructed in such a way that
+    the area of the polygon accurately matches that of the geometrical shape. When either
+    width is non-zero, the returned list describes the outside and the inside of the arc
+    possibly with a different number of points. When width1 is zero and width2 is zero or
+    None, the returned list describes the centerline of the arc.
+
+    Args:
+        radius (float): radius at the center line of the arc in µm.
+        angle (float): angle of arc in degree (default = 90).
+        width1 (float): width of the arc in µm at the start of the arc.
+        width2 (float): width of the arc in µm at the start of the arc.
+        accuracy (float): maximum deviation from geometrical arc in µm.
+        parabolic (bool): when a tapered curve is needed, tapering is parabolic
+            or linear (parabolic=False) with angle.
+
+    Returns:
+        polygon (list of (float, float) coordinate pairs) or polyline if the width1 and
+        width2 are zero.
+    """
+    # Start width (at α=0)
+    width1 = abs(width1)
+    if width2:
+        # End width (at α=angle)
+        width2 = abs(width2)
+    else:
+        width2 = width1
+    sgn = sign(angle)
+    ang = radians(angle)
+    radius = abs(radius)
+    if parabolic:
+        # parabolic width from w=width1 to w=width2.
+        w = partial(parabolicvarwidth, width1, width2)
+    else:
+        # linear width from w=width1 to w=width2.
+        w = partial(linvarwidth, width1, width2)
+    # w(t) is now a function. t runs from 0 to 1.
+
+    # Calculate angular increment and radius correction for outer (or center) curve.
+    width = max(width1, width2)
+    R = radius + width / 2  # maximum outer radius
+    da = 2 * acos(abs(R) / (abs(R) + accuracy))  # step angle for accuracy
+    N = int(abs(ang) / da) + 2  # +1 for rounding +1 for start/end
+    da = ang / N  # step angle for N points
+    Ang = linspace(da / 2, ang - da / 2, N)
+    cor = sqrt(da / sin(da))  # Correction to yield proper area
+    # Construct outer/center polyline
+    p1 = []
+    for a in Ang:
+        r = (radius + w(a / ang) / 2) * cor  # Effective outer radius
+        p1.append((r * sin(abs(a)), sgn * (radius - r * cos(a))))
+
+    if width == 0:
+        # This is the "centerline", return the polyline, but first we have to add one
+        # point in the direction of the tangent, both at start and end to avoid gaps.
+        # However, with small accuracy values and large widths these can still become
+        # sizable gaps.
+        step = abs(radius * da / 2)  # Approx half step, but in the tangent direction
+        p1[0] = (step, 0)  # Replace the first point by this one
+        end = (radius * sin(abs(ang)), sgn * (radius * (1 - cos(ang))))
+        p1[-1] = (end[0] - step * cos(ang), end[1] - step * sin(ang))
+        return [(0, 0)] + p1 + [end]
+
+    # Calculate angular increment and radius correction for inner curve.
+    # w/2 could be larger than radius.
+    R = max(radius - width1 / 2, radius - width2 / 2)
+    da = 2 * acos(abs(R) / (abs(R) + accuracy))  # step angle for accuracy
+    N = int(abs(ang) / da) + 2  # +1 for rounding +1 for start/end
+    da = ang / N  # step angle for N points
+    Ang = linspace(da / 2, ang - da / 2, N)
+    cor = sqrt(da / sin(da))  # Correction to yield proper area
+
+    # Construct inner polyline
+    p2 = []
+    for a in reversed(Ang):
+        r = max((radius - w(a / ang) / 2) * cor, 0)
+        p2.append((r * sin(abs(a)), sgn * (radius - r * cos(a))))
+
+    # Make polygon.
+    ro = max(radius + w(0) / 2, 0)
+    ri = max(radius - w(0) / 2, 0)
+    pstart = [(0, sgn * (radius - ri)), (0, sgn * (radius - ro))]
+    ro = max(radius + w(1) / 2, 0)
+    ri = max(radius - w(1) / 2, 0)
+    pend = [
+        (ro * sin(abs(ang)), sgn * (radius - ro * cos(ang))),
+        (ri * sin(abs(ang)), sgn * (radius - ri * cos(ang))),
+    ]
+    return pstart + p1 + pend + p2  # Return the total polygon.
+
+
+def arc2polyline(radius, angle, accuracy=0.001):
+    """Return polyline representation of an arc. The polyline is never more away from the
+    ideal geometric shape than the value of the specified accuracy.
+
+    Args:
+        radius (float): radius at the center line of the arc in µm.
+        angle (float): angle of arc in degree (default = 90).
+        accuracy (float): maximum deviation from geometrical arc in µm.
+
+    Returns:
+        polyline (list of (float, float) coordinate pairs)
+    """
+    return arc2polygon(radius, angle, width1=0, width2=0, accuracy=accuracy)
+
+
 def viper(x, y, w, N=200, anglei=None, angleo=None):
     """Parametric curve in t.
 
@@ -860,8 +972,9 @@ def viper(x, y, w, N=200, anglei=None, angleo=None):
     return polyline2polygon(xy, width=width, anglei=anglei, angleo=angleo)
 
 
-def transform_polygon(points, dx=0.0, dy=0.0, da=0.0, scale=1.0, flipx=False,
-        flipy=False, x=0.0, y=0.0):
+def transform_polygon(
+    points, dx=0.0, dy=0.0, da=0.0, scale=1.0, flipx=False, flipy=False, x=0.0, y=0.0
+):
     """Transform a polygon by translation, rotation, scaling and/or flipping.
 
     The transformation first applies (dx, dy) to reposition the origin.
@@ -892,8 +1005,12 @@ def transform_polygon(points, dx=0.0, dy=0.0, da=0.0, scale=1.0, flipx=False,
     for u, v in points:
         u = (u + dx) * fu
         v = (v + dy) * fv
-        xy.append((x + scale * (cos(a) * u - sin(a) * v),
-            y + scale * (sin(a) * u + cos(a) * v)))
+        xy.append(
+            (
+                x + scale * (cos(a) * u - sin(a) * v),
+                y + scale * (sin(a) * u + cos(a) * v),
+            )
+        )
     return xy
 
 
@@ -908,7 +1025,7 @@ def read_and_filter_ascii(filename):
     Returns:
         str: ascii layout in <filename> output minus problematic lines
     """
-    with open(filename, 'r') as fref:
+    with open(filename, "r") as fref:
         ref = fref.readlines()
     lineiter = iter(ref)
     file = []
@@ -921,7 +1038,7 @@ def read_and_filter_ascii(filename):
             next(lineiter)
             continue
         file.append(line)
-    return ''.join(file)
+    return "".join(file)
 
 
 def instantiate_full_nazca_tree():
@@ -959,7 +1076,7 @@ def multisub(submapping, subject):
     """
     if not submapping:
         return subject
-    pattern = '|'.join('({:s})'.format(re.escape(old)) for old, new in submapping)
+    pattern = "|".join("({:s})".format(re.escape(old)) for old, new in submapping)
     substs = [new for old, new in submapping]
     replace = lambda m: substs[m.lastindex - 1]
     return re.sub(pattern, replace, subject)
@@ -967,12 +1084,13 @@ def multisub(submapping, subject):
 
 def Tp_fan(N=2):
     """Tempate function for method fan with a closure on N
-   
+
     This allows to define the fan() function with a preset N.
 
     Returns:
         function: fan for N.
     """
+
     def fan(y1=0, y2=1, i=0, N=N):
         """Auxilary fanout normalization function to scale functions for an N-ribbon.
 
@@ -992,28 +1110,155 @@ def Tp_fan(N=2):
             return y1 + ((y2 - y1) * i / (N - 1))
         else:
             return abs(y1 - abs((y1 + y2) * i / (N - 1)))
+
     return fan
 
 
 def fan(y1, y2, i, N):
-     """Auxilary fanout normalization function to scale functions for a N-ribbon.
+    """Auxilary fanout normalization function to scale functions for a N-ribbon.
 
-     Note that there is always a zero point in the interval i in [0, N-1],
-     Hence for both y1 and y2 positive the function will be a v-shape in i.
+    Note that there is always a zero point in the interval i in [0, N-1],
+    Hence for both y1 and y2 positive the function will be a v-shape in i.
 
-     Args:
-         y1 (float): value at i=0
-         y2 (float): value at i=N-1
-         N (int): number of point
-         i (int): counter between 0 and N (not including N)
+    Args:
+        y1 (float): value at i=0
+        y2 (float): value at i=N-1
+        N (int): number of point
+        i (int): counter between 0 and N (not including N)
 
-     Returns:
-         float: intermediate value for at i.
-     """
-     if y1 * y2 < 0:
-         return y1 + ((y2 - y1) * i / (N - 1))
-     else:
-         return abs(y1 - abs((y1 + y2) * i / (N - 1)))
+    Returns:
+        float: intermediate value for at i.
+    """
+    if y1 * y2 < 0:
+        return y1 + ((y2 - y1) * i / (N - 1))
+    else:
+        return abs(y1 - abs((y1 + y2) * i / (N - 1)))
+
+
+def ruler(
+    length=10,
+    width=1.0,
+    pitch=10.0,
+    Nminor=5,
+    Nmajor=4,
+    layer=None,
+    orient="right",
+    start=0,
+    text_height=None,
+    text_factor=1,
+):
+    """Draw a ruler/measure in GDS for e.g. polishing alignment.
+
+    Args:
+        length (float): length of minor tick
+        width (float): width of the ticks
+        pitch (float): pitch between tick
+        Nminor (int): number of steps between major ticks
+        Nmajor (int): number of steps between major ticks
+        layer (int): gds text layer
+        orient (str): position of number with respect to the ticks. Can be 'left' or 'right'
+        start (int): Number of the first tick. Default is 0.
+
+    Returns:
+        Cell: ruler
+    """
+    if orient == "right":
+        sign = 1
+        angle = 0.0
+        align = "lc"
+    else:
+        sign = -1
+        angle = 180.0
+        align = "rc"
+
+    text_height = 2 * pitch if text_height is None else text_height
+
+    cnt = start
+    pitch = pitch
+    length = length
+    width = width
+    minortick = nd.Polygon(
+        points=nd.geometries.box(length=length, width=width), layer=layer
+    )
+    majortick = nd.Polygon(
+        points=nd.geometries.box(length=2 * length, width=width), layer=layer
+    )
+    with nd.Cell("ruler") as C:
+        for major in range(Nmajor):
+            nd.text(
+                text=f"{text_factor * cnt}",
+                align=align,
+                height=text_height,
+                layer=layer,
+            ).put(sign * 2 * length * 1.2, cnt * pitch)
+            for minor in range(Nminor):
+                if minor == 0:
+                    majortick.put(0, cnt * pitch, angle)
+                else:
+                    minortick.put(0, cnt * pitch, angle)
+                cnt += 1
+        nd.text(
+            text=f"{text_factor * cnt}", align=align, height=text_height, layer=layer
+        ).put(sign * 2 * length * 1.2, cnt * pitch)
+        majortick.put(0, cnt * pitch, angle)
+    return C
+
+
+filter_eval_warning = (
+    {}
+)  # Dictionary for storing the function, keyword pair that arleady generated a warning.
+filter_eval_wrapper = {}
+
+
+def filter_eval(func):
+    """Decorator for filtering keyword arguments.
+
+    This decorator allows to call a function with more keyword arguments then originally defined.
+    A warning is logged if this happens. Only one warning is raised for each function, keyword pair.
+
+    Args:
+        func: function to decorate
+
+    Returns:
+        function: decorated function
+    """
+    if func in filter_eval_wrapper:
+        return filter_eval_wrapper[func]
+    else:
+
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            if func in filter_eval_warning:
+                for var in filter_eval_warning[func]:
+                    kwargs.pop(var, None)
+            else:
+                filter_eval_warning[func] = set()
+            while True:
+                try:
+                    return func(*args, **kwargs)
+                except TypeError as e:
+                    if "got an unexpected keyword argument" not in e.args[0]:
+                        raise e
+                    else:
+                        var = e.args[0].split("'")[-2]
+                        kwargs.pop(var)
+                        nd.main_logger(
+                            f'Function "{func.__name__}" in  file "{func.__code__.co_filename.split("/")[-1]}"'
+                            f', line {func.__code__.co_firstlineno} does not support argument "{var}"',
+                            "warning",
+                        )
+                        filter_eval_warning[func].add(var)
+
+        filter_eval_wrapper[func] = wrapper
+    return wrapper
+
+
+class ProtectedPartial(partial):
+    """Like partial, but keywords provided at creation cannot be overwritten at call time."""
+
+    def __call__(self, /, *args, **keywords):
+        keywords = {**keywords, **self.keywords}
+        return self.func(*self.args, *args, **keywords)
 
 
 if __name__ == "__main__":

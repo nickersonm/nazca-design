@@ -36,7 +36,7 @@ def Tp_RFlineGSG(length=100, width_sig=10, width_gnd=10, gap=10, wext_bg=None,
     Returns:
         function that generates a Cell object
     """
-    @bbu.hashme(name, 'length')
+    @bbu.hashme(name, ['length'])
     def cell(length=length, width_sig=width_sig, width_gnd=width_gnd, gap=gap):
         """Create a GSG RF line cell.
 
@@ -131,7 +131,7 @@ def Tp_RFpadGSG(width_sig=10, width_gnd1=10, width_gnd2=None,
     Returns:
         function that generates a Cell object
     """
-    @bbu.hashme(name, 'length_pad')
+    @bbu.hashme(name, ['length_pad'])
     def cell(width_sig=width_sig, width_gnd1=width_gnd1,
              width_gnd2=width_gnd2,
              gap1=gap1, height_tap=height_tap, gap2=gap2,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-#-----------------------------------------------------------------------
+# -----------------------------------------------------------------------
 # This file is part of Nazca.
 #
 # Nazca is free software: you can redistribute it and/or modify
@@ -15,9 +15,9 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with Nazca.  If not, see <http://www.gnu.org/licenses/>.
 #
-# @author: Ronald Broeke (c) 2016-2019
+# @author: Ronald Broeke (c) 2016-2021
 # @email: ronald.broeke@brightphotonics.eu
-#-----------------------------------------------------------------------
+# -----------------------------------------------------------------------
 # -*- coding: utf-8 -*-
 """
 This module defines
@@ -38,25 +38,22 @@ It is also possible to first load layers and xs, and then extend them via
 'add_layer' and/or 'add_layer2xsection'.
 """
 
+import os
 from collections import defaultdict, namedtuple
 import pandas as pd
 import numpy as np
 from pprint import pprint
-from math import isnan
 import matplotlib as mpl
 from matplotlib.colors import rgb2hex
-
 from . import cfg
 from . import xsection
 from nazca.logging import logger
 import nazca as nd
-#from nazca.mask_elements import _handle_missing_xs
-
 
 # keep track of layers used by the designer that have not been defined:
 unknown_layers = set()
 unknown_xsections = set()
-#cfg.layerset = set() #set of all (L, D) layers defined
+# cfg.layerset = set() #set of all (L, D) layers defined
 
 cfg.layername2LDT = {}
 cfg.layername2LDT_cnt = defaultdict(int)
@@ -64,36 +61,37 @@ cfg.layername2LDT_cnt = defaultdict(int)
 cfg.xsection_table = pd.DataFrame()
 xsection_table_attr = ['xsection', 'xsection_foundry', 'origin', 'stub', 'description']
 
-
-#layer-table:
-cfg.layer_table = pd.DataFrame() # layer_name -> index
-layer_table_attr_csv  = ['layer', 'datatype', 'tech', 'layer_name_foundry',
-    'accuracy', 'origin',       'remark', 'description']
-#rename attributes for the xs-layer join to avoid name clashes:
+# layer-table:
+cfg.layer_table = pd.DataFrame()  # layer_name -> index
+layer_table_attr_csv = ['layer', 'datatype', 'tech', 'layer_name_foundry',
+                        'accuracy', 'origin', 'remark', 'description']
+# rename attributes for the xs-layer join to avoid name clashes:
 layer_table_attr_join = ['layer', 'datatype', 'tech', 'layer_name_foundry',
-    'accuracy', 'origin_layer', 'remark', 'description']
+                         'accuracy', 'origin_layer', 'remark', 'description']
 
-
-#layercolor table:
+# layercolor table:
 cfg.colors = pd.DataFrame()
 cfg.xs_list = []
-colors_attr_csv = ['name', 'layer', 'datatype', 'depth', 'fill_color', 'frame_color', 'frame_brightness', 'fill_brightness', 'dither_pattern', 'valid', 'visible', 'transparent', 'width', 'marked', 'animation']
+colors_attr_csv = ['name', 'layer', 'datatype', 'depth', 'fill_color', 'frame_color', 'frame_brightness',
+                   'fill_brightness', 'dither_pattern', 'valid', 'visible', 'transparent', 'width', 'marked',
+                   'animation']
 
-
-#xsection-layer-map table, mapping layers to xsections:
+# xsection-layer-map table, mapping layers to xsections:
 cfg.xsection_layer_map = pd.DataFrame()
 
-xsection_layer_map_attr_csv  = ['layer_name', 'xsection', 'growx', 'leftedgefactor', 'leftedgeoffset', 'rightedgefactor', 'rightedgeoffset', 'growy', 'growy1', 'growy2', 'polyline' , 'origin']
-#rename attributes for the xs-layer join to avoid name clashes:
-xsection_layer_map_attr_join = ['layer_name', 'xsection', 'growx', 'leftedgefactor', 'leftedgeoffset', 'rightedgefactor', 'rightedgeoffset', 'growy', 'growy1', 'growy2', 'polyline', 'origin_xs']
+xsection_layer_map_attr_csv = ['layer_name', 'xsection', 'growx', 'leftedgefactor', 'leftedgeoffset', 'rightedgefactor',
+                               'rightedgeoffset', 'growy', 'growy1', 'growy2', 'polyline', 'origin']
+# rename attributes for the xs-layer join to avoid name clashes:
+xsection_layer_map_attr_join = ['layer_name', 'xsection', 'growx', 'leftedgefactor', 'leftedgeoffset',
+                                'rightedgefactor', 'rightedgeoffset', 'growy', 'growy1', 'growy2', 'polyline',
+                                'origin_xs']
 
+# final set of export attributes for joined xsection-layers table:
+# mask_layers_attr = ['layer_name', 'xsection', 'layer', 'datatype', 'tech', 'growx', 'growy', 'accuracy']
+mask_layers_attr = ['layer_name', 'xsection', 'layer', 'datatype', 'tech', 'growx', 'leftedgefactor', 'leftedgeoffset',
+                    'rightedgefactor', 'rightedgeoffset', 'growy', 'growy1', 'growy2', 'accuracy', 'polyline']
 
-#final set of export attributes for joined xsection-layers table:
-#mask_layers_attr = ['layer_name', 'xsection', 'layer', 'datatype', 'tech', 'growx', 'growy', 'accuracy']
-mask_layers_attr = ['layer_name', 'xsection', 'layer', 'datatype', 'tech', 'growx', 'leftedgefactor', 'leftedgeoffset', 'rightedgefactor', 'rightedgeoffset', 'growy', 'growy1', 'growy2', 'accuracy', 'polyline']
-
-
-layer_debug = False # flag for debug output to stdout.
+layer_debug = False  # flag for debug output to stdout.
 block_load_colors = False
 None_layerflag = False  # register if layer=None message has been issued
 
@@ -114,39 +112,37 @@ def _check_duplicates(df, tablename):
         if layer_debug:
             print("\nDuplicate layers found in '{}':".format(tablename))
             print("\nSame ['layer', 'datatype', 'tech'], but different layer_name.")
-            print(df[['layer_name']+ID].sort_values(by=ID)[G])
+            print(df[['layer_name'] + ID].sort_values(by=ID)[G])
         return True
     return False
 
 
 def add_layer(
-    name=None,
-    layer=None,
-    tech=None,
-    accuracy=None,
-    fab_name=None,
-    origin=None,
-    remark=None,
-    description='',
-    overwrite=False,
-
-    # color info:
-    frame_color=None,
-    fill_color=None,
-    frame_brightness=None,
-    fill_brightness=None,
-    dither_pattern=None,
-    valid=None,
-    visible=None,
-    transparent=None,
-    width=None,
-    marked=None,
-    animation=None,
-    alpha=None,
-
-    # flow control:
-    unknown=False,
-    merge=True,
+        name=None,
+        layer=None,
+        tech=None,
+        accuracy=None,
+        fab_name=None,
+        origin=None,
+        remark=None,
+        description='',
+        overwrite=False,
+        # color info:
+        frame_color=None,
+        fill_color=None,
+        frame_brightness=None,
+        fill_brightness=None,
+        dither_pattern=None,
+        valid=None,
+        visible=None,
+        transparent=None,
+        width=None,
+        marked=None,
+        animation=None,
+        alpha=None,
+        # flow control:
+        unknown=False,
+        merge=True,
 ):
     """Create a new mask layer.
 
@@ -177,7 +173,7 @@ def add_layer(
         #   - If a layer is redirected to 'dump' then raise a warning (first time it occurs)
         LDT_or_name = cfg.default_layers.get(name, False)
         if LDT_or_name:
-            if isinstance(LDT_or_name, str): # for ID (str) mapped to ID (str)
+            if isinstance(LDT_or_name, str):  # for ID (str) mapped to ID (str)
                 _layer, _datatype, _tech = cfg.layername2LDT[LDT_or_name]
             elif len(LDT_or_name) == 2:
                 _layer, _datatype = LDT_or_name
@@ -195,16 +191,19 @@ def add_layer(
                     if ML == newML:
                         name = MLname
                         isDefault = 'by_value'
+                        # nd.main_logger(f"Activated Nazca default layer ID '{name}' for requested layer {ML}.", "debug")
                         break
 
         if isDefault is False:
             # create a new layer or redirect to 'dump'
-            if cfg.redirect_unknown_layers: # do not auto-create unknown layers.
+            if cfg.redirect_unknown_layers:  # do not auto-create unknown layers.
                 if layer not in unknown_layers:
                     # TODO: user option to raise exception to correct the error.
-                    msg = f"Unknown layer {layer} in get_layer()."\
-                        f" Moving layout content to the 'dump 'layer 'dump' instead,"\
-                        f" because redirect_unknown_layers = True."
+                    if layer is None and name != "":
+                        layer = f"'{name}'"
+                    msg = f"Unknown layer {layer} in get_layer()." \
+                          f" Moving layout content to the 'dump 'layer 'dump' instead," \
+                          f" because redirect_unknown_layers = True."
                     if isinstance(cfg.gdsload, str):
                         msg += f" Layer found while loading '{cfg.gdsload}'."
                     nd.main_logger(msg, "warning")
@@ -213,11 +212,11 @@ def add_layer(
             elif layer is None:
                 if not None_layerflag:
                     nd.main_logger(f"Using layer=None. Setting it to 'dump' layer instead. "
-                        f"Alternatively create this layer explicitly using:\n"
-                        f"add_layer(name='{name}', layer=(<layerinfo>))\n"
-                        f"This message is only shown once.",
-                        "warning"
-                    )
+                                   f"Alternatively create this layer explicitly using:\n"
+                                   f"add_layer(name='{name}', layer=(<layerinfo>))\n"
+                                   f"This message is only shown once.",
+                                   "warning"
+                                   )
                     None_layerflag = True
                 return get_layer('dump')
 
@@ -252,21 +251,23 @@ def add_layer(
         raise Exception(mes)
 
     if accuracy is None:
-        accuracy = cfg.default_xs['accuracy'][0]
+        accuracy = cfg.default_xs_layer['accuracy'][0]
     if origin is None:
-        origin = cfg.default_xs['origin'][0]
+        origin = cfg.default_xs_layer['origin'][0]
     if name is None:
         name = '{}/{}/{}'.format(_layer, _datatype, tech)
 
-    if name in cfg.layername2LDT.keys() and not overwrite: # existing layer_name (ID):
+    if name in cfg.layername2LDT.keys() and not overwrite:  # existing layer_name (ID):
         if isDefault == 'by_value':
             if (_layer, _datatype, tech) != cfg.layername2LDT[name]:
-                mes = f"Provided layer ({_layer}, {_datatype}) maps to an already used layer ID '{name}'"
-                logger.warning(mes)
+                mes = f"Layer number ({_layer}, {_datatype}) can not map to Nazca default layer ID '{name}'," \
+                      f" because it is already in use by {cfg.layername2LDT[name][:2]}. To solve this issue," \
+                      f" adapt default layerID mapping or use another layer number then ({_layer}, {_datatype})."
+                nd.main_logger(mes, "warning")
         else:
-            mes = "Reusing an existing layer_name '{}'."\
-            " Use a different layer name or set overwrite=True.".format(name)
-            logger.warning(mes)
+            mes = "Reusing an existing layer_name '{}'." \
+                  " Use a different layer name or set overwrite=True.".format(name)
+            nd.main_logger(mes, "warning")
     else:
         LDT = (_layer, _datatype, tech)
         cfg.layername2LDT[name] = LDT
@@ -289,21 +290,28 @@ def add_layer(
 
         df = pd.DataFrame(newlayer)
         df.set_index('layer_name', inplace=True)
-        try: #pandas in python 3.7
+        try:  # Pandas in python 3.7
             cfg.layer_table = pd.concat([cfg.layer_table, df], sort=True)
-        except:  #pandas in python <= 3.6
+        except:  # Pandas in python <= 3.6
             cfg.layer_table = pd.concat([cfg.layer_table, df])
 
         set_layercolor(layer_name,
-            frame_color, fill_color, frame_brightness, fill_brightness,
-            dither_pattern, valid, visible, transparent, width, marked, animation,
-            alpha)
+                       frame_color, fill_color, frame_brightness, fill_brightness,
+                       dither_pattern, valid, visible, transparent, width, marked, animation,
+                       alpha)
 
         merge_xsection_layers_with_layers()
     return name
 
 
-def add_XSdict(name, name_foundry=None, origin='add_xsection', stub=None, description=''):
+def add_XSdict(
+        name,
+        name_foundry=None,
+        origin='add_xsection',
+        stub=None,
+        description='',
+        pinstyle=None,
+):
     """Create a new Xsection object named <name>.
 
     If a Xsection with <name> already exists, the existing Xsection is returned.
@@ -323,6 +331,7 @@ def add_XSdict(name, name_foundry=None, origin='add_xsection', stub=None, descri
         XS.description = description
         XS.origin = origin
         XS.stub = stub
+        XS.pinstyle = pinstyle
 
         # add new info to xsection_layers:
         D = {
@@ -333,11 +342,11 @@ def add_XSdict(name, name_foundry=None, origin='add_xsection', stub=None, descri
         }
 
         if cfg.xsection_table.empty:
-            cfg.xsection_table = cfg.xsection_table.append(D, ignore_index=True)
+            cfg.xsection_table = pd.concat([cfg.xsection_table, pd.DataFrame(D, index=[0])], ignore_index=True)
         elif cfg.xsection_table[cfg.xsection_table['xsection'] == name].empty:
-            cfg.xsection_table = cfg.xsection_table.append(D, ignore_index=True)
+            cfg.xsection_table = pd.concat([cfg.xsection_table, pd.DataFrame(D, index=[0])], ignore_index=True)
 
-        #update mask_layers:
+        # update mask_layers:
         merge_xsection_layers_with_layers()
     else:
         XS = get_xsection(name)
@@ -349,6 +358,7 @@ def add_XSdict(name, name_foundry=None, origin='add_xsection', stub=None, descri
             XS.origin = origin
 
     return cfg.XSdict[name]
+
 
 add_xsection = add_XSdict
 
@@ -364,18 +374,29 @@ def parse_grow(edge, side, default):
     if isinstance(edge, (float, int)):
         return (side, float(edge))
     if not isinstance(edge, tuple):
-        logger.error("Growth value for layer in xsection should be a tuple like (width_factor, shift)."\
-            " Using value (1.0, 0.0) instead of given {}".format(edge))
+        logger.error("Growth value for layer in xsection should be a tuple like (width_factor, shift)." \
+                     " Using value (1.0, 0.0) instead of given {}".format(edge))
         return (1.0, 0.0)
     else:
         return edge
 
 
-def add_layer2xsection(xsection='name', layer=None,
-        growx=None, leftedge=None, rightedge=None,
-        growy=None, growy1=None, growy2=None,
-        accuracy=None, fab_name=None, origin=None,
-        overwrite=False, polyline=False, remark=None):
+def add_layer2xsection(
+        xsection='name',
+        layer=None,
+        growx=None,
+        leftedge=None,
+        rightedge=None,
+        growy=None,
+        growy1=None,
+        growy2=None,
+        accuracy=None,
+        fab_name=None,
+        origin=None,
+        overwrite=False,
+        polyline=False,
+        remark=None,
+):
     """Add a layer to the Xsection object with name <xsection>.
 
     If <xsection> does not exist yet it will be created.
@@ -416,9 +437,9 @@ def add_layer2xsection(xsection='name', layer=None,
     """
     layer = get_layer(layer)
     if growx is None:
-        growx = cfg.default_xs['growx'][0]
+        growx = cfg.default_xs_layer['growx'][0]
     if growy is None:
-        growy = cfg.default_xs['growy'][0]
+        growy = cfg.default_xs_layer['growy'][0]
     leftedgefactor, leftedgeoffset = parse_grow(leftedge, 0.5, growx)
     rightedgefactor, rightedgeoffset = parse_grow(rightedge, -0.5, -growx)
     if growy1 is None:
@@ -427,7 +448,7 @@ def add_layer2xsection(xsection='name', layer=None,
         growy2 = growy
 
     if origin is None:
-        origin = cfg.default_xs['origin'][0]
+        origin = cfg.default_xs_layer['origin'][0]
     if accuracy is None:
         accuracy = cfg.layer_table.loc[layer]['accuracy']
     if xsection not in cfg.XSdict.keys():
@@ -435,11 +456,11 @@ def add_layer2xsection(xsection='name', layer=None,
 
     if not cfg.xsection_layer_map.empty:
         select = (
-            (cfg.xsection_layer_map['xsection']==xsection) &
-            (cfg.xsection_layer_map['layer_name']==layer)
+                (cfg.xsection_layer_map['xsection'] == xsection) &
+                (cfg.xsection_layer_map['layer_name'] == layer)
         )
         LayerRow = cfg.xsection_layer_map[select]
-        if not LayerRow.empty and overwrite: # overwrite layer entry
+        if not LayerRow.empty and overwrite:  # overwrite layer entry
             cfg.xsection_layer_map.loc[
                 select,
                 ['growx',
@@ -452,23 +473,23 @@ def add_layer2xsection(xsection='name', layer=None,
                  'growy2',
                  'polyline']
             ] = (growx,
-                leftedgefactor,
-                leftedgeoffset,
-                rightedgefactor,
-                rightedgeoffset,
-                growy,
-                growy1,
-                growy2,
-                polyline
-            )
+                 leftedgefactor,
+                 leftedgeoffset,
+                 rightedgefactor,
+                 rightedgeoffset,
+                 growy,
+                 growy1,
+                 growy2,
+                 polyline
+                 )
             cfg.xs_list = cfg.xsection_layer_map['xsection'].unique()
             merge_xsection_layers_with_layers()
             return cfg.XSdict[xsection]
     else:
-        pass # first xs is a but random choice and confusing when using nd.strt() type of elements.
+        pass  # first xs is a but random choice and confusing when using nd.strt() type of elements.
         # cfg.default_xs_name = xsection # set default xs to first user defined xs.
 
-    #define new layer entry
+    # define new layer entry
     D = {
         'layer_name': str(layer),
         'xsection': xsection,
@@ -487,10 +508,11 @@ def add_layer2xsection(xsection='name', layer=None,
         'polyline': polyline,
         'source': 'add_layer'
     }
-    cfg.xsection_layer_map = cfg.xsection_layer_map.append(D, ignore_index=True)
+    cfg.xsection_layer_map = pd.concat([cfg.xsection_layer_map, pd.DataFrame(D, index=[0])], ignore_index=True)
 
     merge_xsection_layers_with_layers()
     return cfg.XSdict[xsection]
+
 
 add_xsection_layer = add_layer2xsection
 
@@ -533,9 +555,9 @@ def load_layers(filename, tech=None, clear=False, autocolor=False):
     if 'tech' not in load_table:
         load_table['tech'] = tech
         if layer_debug:
-            print("Column 'tech' missing in file '{}'."\
-                " Column has been added after load."\
-                " For explicitly use of 'tech' add it to the table".format(filename))
+            print("Column 'tech' missing in file '{}'." \
+                  " Column has been added after load." \
+                  " For explicitly use of 'tech' add it to the table".format(filename))
     if 'origin' not in load_table:
         load_table['origin'] = ''
     if 'remark' not in load_table:
@@ -546,7 +568,7 @@ def load_layers(filename, tech=None, clear=False, autocolor=False):
         load_table.description = load_table.description.fillna('')
 
     load_table.dropna(subset=['layer_name'], inplace=True)
-    load_table['layer'] = load_table['layer'].astype(int) # note this gets you dtype numpy.int64
+    load_table['layer'] = load_table['layer'].astype(int)  # note this gets you dtype numpy.int64
     load_table['datatype'] = load_table['datatype'].astype(int)
     load_table['source'] = filename
 
@@ -561,17 +583,17 @@ def load_layers(filename, tech=None, clear=False, autocolor=False):
             remark=row.remark,
             description=row.description,
             merge=False)
-            # merge only after adding multiple layers to save time
-            # add_layer() check if the layername is unique
+        # merge only after adding multiple layers to save time
+        # add_layer() check if the layername is unique
     merge_xsection_layers_with_layers()
 
     if autocolor:
         for i, (name, L, D, T) in load_table[['layer_name', 'layer', 'datatype', 'tech']].iterrows():
             set_layercolor(name, (L, D, T),
-                frame_color=None, fill_color=None, frame_brightness=None,
-                fill_brightness=None, dither_pattern=None, valid=None,
-                visible=None, transparent=None, width=None, marked=None,
-                animation=None, alpha=None)
+                           frame_color=None, fill_color=None, frame_brightness=None,
+                           fill_brightness=None, dither_pattern=None, valid=None,
+                           visible=None, transparent=None, width=None, marked=None,
+                           animation=None, alpha=None)
 
     return cfg.layer_table
 
@@ -593,29 +615,28 @@ def load_xsection_layer_map(filename, tech=None):
     cfg.xsection_layer_map = pd.read_csv(filename, delimiter=',')
 
     cfg.xsection_layer_map = cfg.xsection_layer_map[pd.notnull(cfg.xsection_layer_map['xsection'])]
-    cfg.xsection_layer_map = cfg.xsection_layer_map.where((pd.notnull(cfg.xsection_layer_map)), None)
-    # cfg.xsection_layer_map.dropna(inplace=True)
+    cfg.xsection_layer_map = cfg.xsection_layer_map.replace({np.nan: None})
 
     if 'tech' not in cfg.xsection_layer_map.columns:
         cfg.xsection_layer_map['tech'] = tech
         if layer_debug:
-            logger.warning("Column 'tech' missing in file '{}'."\
-                "Column has been added after load"\
-                " with value {}".format(filename, tech))
+            logger.warning("Column 'tech' missing in file '{}'." \
+                           "Column has been added after load" \
+                           " with value {}".format(filename, tech))
     if 'leftedgefactor' not in cfg.xsection_layer_map.columns:
-       cfg.xsection_layer_map['leftedgefactor'] = None
+        cfg.xsection_layer_map['leftedgefactor'] = None
     if 'leftedgeoffset' not in cfg.xsection_layer_map.columns:
-       cfg.xsection_layer_map['leftedgeoffset'] = None
+        cfg.xsection_layer_map['leftedgeoffset'] = None
     if 'rightedgefactor' not in cfg.xsection_layer_map.columns:
-       cfg.xsection_layer_map['rightedgefactor'] = None
+        cfg.xsection_layer_map['rightedgefactor'] = None
     if 'rightedgeoffset' not in cfg.xsection_layer_map.columns:
-       cfg.xsection_layer_map['rightedgeoffset'] = None
+        cfg.xsection_layer_map['rightedgeoffset'] = None
     if 'growy1' not in cfg.xsection_layer_map.columns:
-       cfg.xsection_layer_map['growy1'] = None
+        cfg.xsection_layer_map['growy1'] = None
     if 'growy2' not in cfg.xsection_layer_map.columns:
-       cfg.xsection_layer_map['growy2'] = None
+        cfg.xsection_layer_map['growy2'] = None
     if 'polyline' not in cfg.xsection_layer_map.columns:
-       cfg.xsection_layer_map['polyline'] = False
+        cfg.xsection_layer_map['polyline'] = False
 
     for i, row in cfg.xsection_layer_map.iterrows():
         if row.leftedgefactor is None:
@@ -653,7 +674,7 @@ def load_xsections(filename):
     cfg.xsection_table = pd.read_csv(filename, delimiter=',')
     cfg.xsection_table.dropna(how='all', inplace=True)
 
-    #temptable = cfg.xsection_table.set_index('xsection')
+    # temptable = cfg.xsection_table.set_index('xsection')
     if 'description' not in cfg.xsection_table:
         cfg.xsection_table['description'] = ''
     cfg.xsection_table['description'] = cfg.xsection_table['description'].fillna('')
@@ -661,14 +682,14 @@ def load_xsections(filename):
 
     for i, row in cfg.xsection_table.iterrows():
         add_XSdict(name=row.xsection, description=row.description,
-            origin=row.origin, stub=row.stub)
+                   origin=row.origin, stub=row.stub)
 
-    #TODO: check naming consistency of stubs
-    #TODO: check for unique names
-    #TODO: fill missing nazca_name with fab_name?
-    #TODO: check if all xs are present in the xs definition.
+    # TODO: check naming consistency of stubs
+    # TODO: check for unique names
+    # TODO: fill missing nazca_name with fab_name?
+    # TODO: check if all xs are present in the xs definition.
 
-    #update mask_layers:
+    # update mask_layers:
     merge_xsection_layers_with_layers()
     return cfg.xsection_table
 
@@ -694,28 +715,27 @@ def merge_xsection_layers_with_layers():
     Returns:
         None
     """
-    if cfg.layer_table.empty or\
-        cfg.xsection_layer_map.empty or\
-        cfg.xsection_table.empty:
+    if cfg.layer_table.empty or \
+            cfg.xsection_layer_map.empty or \
+            cfg.xsection_table.empty:
         return None
 
-    #TODO: check if column names exists in cfg.xsection_layer_map.empty
-    #TODO: deal with NaN entries, i.e. no (layer, datatype) match.
+    # TODO: check if column names exists in cfg.xsection_layer_map.empty
+    # TODO: deal with NaN entries, i.e. no (layer, datatype) match.
 
     # rename to internal column names and create layer-xsection merge.
     layers = cfg.layer_table[layer_table_attr_csv].rename(
         columns=dict(zip(
             layer_table_attr_csv,
             layer_table_attr_join))
-        )
+    )
     layers2 = layers.reset_index()
     xsections_layers = cfg.xsection_layer_map[
         xsection_layer_map_attr_csv].rename(
-            columns=dict(zip(
-                xsection_layer_map_attr_csv,
-                xsection_layer_map_attr_join))
-            )
-
+        columns=dict(zip(
+            xsection_layer_map_attr_csv,
+            xsection_layer_map_attr_join))
+    )
 
     Merged = pd.merge(
         left=xsections_layers,
@@ -729,7 +749,7 @@ def merge_xsection_layers_with_layers():
     if isna.any():
         unknown_layers = Merged['layer_name'][isna].values
         raise Exception(f"Refering to undefined layer(s) in xsection_layer_map: {unknown_layers}. "
-            "Correct the spelling or add the layer(s) explicitly.")
+                        "Correct the spelling or add the layer(s) explicitly.")
 
     # reset the xsextion's layer-table when merge is called for a fresh build.
     cfg.xs_list = cfg.xsection_table['xsection'].unique()
@@ -769,11 +789,10 @@ def get_xsection(name):
     Returns:
         Xsection: Xsection object with name <name>
     """
-    if hasattr(name, 'xs'): # if name is a pin (Node) get its xsection name
+    if hasattr(name, 'xs'):  # if name is a pin (Node) get its xsection name
         name = name.xs
     if not name in cfg.XSdict.keys():
-        if name == cfg.default_xs_name:
-            #add_xsection(cfg.default_xs_name)
+        if name in cfg.default_xs_list or name is None:
             nd.handle_missing_xs(name)
         else:
             msg = "\nNo xsection object existing under xsection name '{}'.".format(name)
@@ -782,7 +801,8 @@ def get_xsection(name):
                 msg += "\n  '{}'".format(xname)
             msg += "\nAlternatively, add a new xsection as:"
             msg += "\n  add_xsection(name='{}')".format(name)
-            raise Exception(msg)
+            nd.main_logger(msg, "error")
+            return None
     return cfg.XSdict[name]
 
 
@@ -814,10 +834,10 @@ def get_layer(layer, aslist=False):
             LDT = layer
         elif n == 2:
             LDT = (layer[0], layer[1], cfg.default_tech)
-        elif n ==1:
+        elif n == 1:
             LDT = (layer[0], 0, cfg.default_tech)
         else:
-            mes = "Error: invalid tuple format for layer {}. Tuple length must be <= 3.".\
+            mes = "Error: invalid tuple format for layer {}. Tuple length must be <= 3.". \
                 format(layer)
             logger.exception(mes)
             raise Exception(mes)
@@ -837,15 +857,15 @@ def get_layer(layer, aslist=False):
         if not aslist:
             cfg.LDT2layername[LDT] = names[0]
             if cfg.gdsload != cfg.gdsloadstore:  # avoid repeating messages during single gds load
-                msg = "Non-unique layer identifier used: {0}. "\
-                    "Matching layer_names for {0} are {1}. "\
-                    "Continuing here with layer_name = '{2}'.".\
+                msg = "Non-unique layer identifier used: {0}. " \
+                      "Matching layer_names for {0} are {1}. " \
+                      "Continuing here with layer_name = '{2}'.". \
                     format(layer, names, cfg.LDT2layername[LDT])
                 if isinstance(cfg.gdsload, str):
                     cfg.gdsloadstore = cfg.gdsload
-                    msg +=  f" It occured when loading gds file '{cfg.gdsload}'. "\
-                        f"This message can be removed by mapping the layer explicitly "\
-                        f"in the load using the layermap keyword, e.g. layermap={{{layer}: '{cfg.LDT2layername[LDT]}'}}"
+                    msg += f" It occured when loading gds file '{cfg.gdsload}'. " \
+                           f"This message can be removed by mapping the layer explicitly " \
+                           f"in the load using the layermap keyword, e.g. layermap={{{layer}: '{cfg.LDT2layername[LDT]}'}}"
                 nd.main_logger(msg, "warning")
                 # Note that a non-unique (L, D) becomes tricky when importing GDS;
                 # The GDS format only uses (L, D) as the layer identifier,
@@ -867,11 +887,12 @@ def get_layer(layer, aslist=False):
 
 
 layer_tuple = namedtuple('layer_info',
-    ['layer',
-     'datatype',
-     'tech'
-    ]
-)
+                         ['layer',
+                          'datatype',
+                          'tech'
+                          ]
+                         )
+
 
 def get_layer_tuple(layer):
     """Get layer information as tuple components (layer, datatype, technology).
@@ -880,7 +901,7 @@ def get_layer_tuple(layer):
         layer_tuple: layer info (L, D, T) as a named tuple
     """
     lay = get_layer(layer)
-    return layer_tuple (
+    return layer_tuple(
         layer=cfg.layername2LDT[lay][0],
         datatype=cfg.layername2LDT[lay][1],
         tech=cfg.layername2LDT[lay][2]
@@ -961,9 +982,9 @@ def get_parameter(name):
     return float(cfg.dfp[cfg.dfp['name'] == name]['value'])
 
 
-#==============================================================================
+# ==============================================================================
 # plt
-#==============================================================================
+# ==============================================================================
 def set_plt_properties(figsize=14, cmap=None, N=32, alpha=0.3):
     """Set the default colormap to use in Matplotlib output for mask layout.
 
@@ -979,11 +1000,11 @@ def set_plt_properties(figsize=14, cmap=None, N=32, alpha=0.3):
     if cmap is None:
         cmap = cfg.plt_cmap_name
 
-    mp = mpl.cm.get_cmap(cmap)
+    mp = mpl.colormaps[cmap]
     if isinstance(mp, mpl.colors.LinearSegmentedColormap):
         cfg.plt_cmap = []
         for n in range(N):
-            cfg.plt_cmap.append(mp(n/N))
+            cfg.plt_cmap.append(mp(n / N))
     else:
         cfg.plt_cmap = mp.colors
 
@@ -991,26 +1012,26 @@ def set_plt_properties(figsize=14, cmap=None, N=32, alpha=0.3):
     cfg.plt_figsize = figsize
     cfg.plt_alpha = alpha
 
-#make sure colors are set:
+
+# make sure colors are set:
 set_plt_properties()
 
-
-#==============================================================================
+# ==============================================================================
 # colors
-#==============================================================================
+# ==============================================================================
 color_defaults = {
     'fill_color': 0,
     'frame_color': 0,
-    'transparent': True,    # Klayout transparancy flag
-    'frame_brightness':32,  # Klayout transparency level
+    'transparent': True,  # Klayout transparancy flag
+    'frame_brightness': 32,  # Klayout transparency level
     'fill_brightness': 32,  # Klayout transparency level
-    'dither_pattern': 'I0', # KLayout dither
+    'dither_pattern': 'I0',  # KLayout dither
     'marked': False,
-    'animation': 1,         # blinking if True
-    'valid': True,          # KLayout valid flag (editable)
-    'visible': True,        # layer visible if True
-    'width': 0,             # frame width
-    'alpha' : 0.3           # Matplotlib transparency level in
+    'animation': 1,  # blinking if True
+    'valid': True,  # KLayout valid flag (editable)
+    'visible': True,  # layer visible if True
+    'width': 0,  # frame width
+    'alpha': 0.3  # Matplotlib transparency level in
 }
 
 
@@ -1027,18 +1048,23 @@ def load_layercolors(filename):
     # For Klayout tabs with groups the layer column contains a '*'
     # and Pandas will create type->str
     # For tabs without groups the layer is read as type->int
+
+    if not os.path.exists(filename):
+        nd.main_logger(f"Color file not found, skipping loading of: '{filename}'", "info")
+        return None
+
     df1 = pd.read_csv(filename)
 
     # filter out expected columns
     df1 = df1[colors_attr_csv]
 
     df1['layer'] = df1['layer'].astype(str)
-    #df1.loc[df1['width'] == 'na', 'width'] = 0
+    # df1.loc[df1['width'] == 'na', 'width'] = 0
 
     df1.width.replace('na', 0, inplace=True)
-    #df1.replace('na', '', inplace=True)
+    # df1.replace('na', '', inplace=True)
 
-    #TODO: creates a brand new table and forgets present settings
+    # TODO: creates a brand new table and forgets present settings
     #  needs an update to handle mutliple layer/color sets.
     cfg.colors = df1[df1['layer'] != '*'].dropna(subset=['layer'])
     cfg.colors.reset_index(inplace=True)
@@ -1047,33 +1073,33 @@ def load_layercolors(filename):
         cfg.colors['datatype'] = cfg.colors['datatype'].astype(int)
     except:
         logger.exception('Check load_layercolors.')
-        #print('Group in load_layercolors:', cfg.colors['layer'], '\n')
-    #TODO: the try will trigger on any layer entry with text.
+        # print('Group in load_layercolors:', cfg.colors['layer'], '\n')
+    # TODO: the try will trigger on any layer entry with text.
     # as a resuls all the layers and datatype remain a string.
 
     # Using a color_name key rather than layername, because mask viewer use the
     #  (L, D) and in Nazca these have to map to the all layer_names
     #  having these (L, D). Hence the color_name based on "L/D"
     cfg.colors['color_name'] = cfg.colors.apply(
-         lambda row: "{}/{}".format(row.layer, row.datatype), axis=1)
+        lambda row: "{}/{}".format(row.layer, row.datatype), axis=1)
     cfg.colors['alpha'] = 0.3
     return None
 
 
 def set_layercolor(
-    layer=None,
-    frame_color=None,
-    fill_color=None,
-    frame_brightness=None,
-    fill_brightness=None,
-    dither_pattern=None,
-    valid=None,
-    visible=None,
-    transparent=None,
-    width=None,
-    marked=None,
-    animation=None,
-    alpha=None):
+        layer=None,
+        frame_color=None,
+        fill_color=None,
+        frame_brightness=None,
+        fill_brightness=None,
+        dither_pattern=None,
+        valid=None,
+        visible=None,
+        transparent=None,
+        width=None,
+        marked=None,
+        animation=None,
+        alpha=None):
     """Set layer color information.
 
     Generate a tabel (DataFrame) with layer color information.
@@ -1097,7 +1123,7 @@ def set_layercolor(
     kltab_name = "{}/{} {}".format(layer, datatype, layer_name)
 
     colors = {
-        'depth': 1, # group depth
+        'depth': 1,  # group depth
         'layer_name': layer_name,
         'name': kltab_name,
         'color_name': color_name,
@@ -1114,7 +1140,7 @@ def set_layercolor(
         'width': width,
         'marked': marked,
         'animation': animation,
-        'alpha' : alpha
+        'alpha': alpha
     }
 
     assert isinstance(layer, int)
@@ -1128,8 +1154,8 @@ def set_layercolor(
 
     df = None
     if coloritems == 0:
-        #TODO: not here or the colors can't be changed later on.
-        #col = mpl.colors.to_hex(cfg.plt_cmap[layer % cfg.plt_cmap_size])
+        # TODO: not here or the colors can't be changed later on.
+        # col = mpl.colors.to_hex(cfg.plt_cmap[layer % cfg.plt_cmap_size])
         col = rgb2hex(cfg.plt_cmap[int(layer % cfg.plt_cmap_size)])
         if fill_color is None:
             colors['fill_color'] = col
@@ -1143,21 +1169,21 @@ def set_layercolor(
         df = pd.DataFrame(colors, index=[0])
 
         # note the df will get a dtype numpy int, not native Python int
-        try: #pandas in python 3.7
+        try:  # pandas in python 3.7
             cfg.colors = pd.concat([cfg.colors, df], ignore_index=True, sort=True)
-        except:  #pandas in python <= 3.6
+        except:  # pandas in python <= 3.6
             cfg.colors = pd.concat([cfg.colors, df], ignore_index=True)
 
     elif coloritems == 1:
-        for attr in cfg.colors.columns: # use existing values for undefined attributes
+        for attr in cfg.colors.columns:  # use existing values for undefined attributes
             if attr in colors.keys():
                 if colors[attr] is None:
-                    #TODO: Better use a try to catch color_defaults are missing?:
+                    # TODO: Better use a try to catch color_defaults are missing?:
                     if attr in color_defaults.keys():
                         colors[attr] = color_duplicate[attr].iloc[0]
             else:
                 colors[attr] = color_duplicate[attr].iloc[0]
-        df = pd.DataFrame(colors, index=color_duplicate.index) #.set_index(idx)
+        df = pd.DataFrame(colors, index=color_duplicate.index)  # .set_index(idx)
 
         # TODO: this could be a new (extra) layername with an old layer number
         # now it's always overwritten when add_layer() is called:
@@ -1190,9 +1216,30 @@ def save_colormap(filename=None):
     return None
 
 
-#==============================================================================
+def get_layermap(origin=None):
+    """Filter layers by origing and create layermap of them of layer to keep.
+
+    Args:
+        origin (str): String to filter layer_table origin column on.
+
+    Returns:
+        dict: layermap
+    """
+    layers = nd.cfg.layer_table.copy()
+
+    if origin is None:
+        export_layers = list(layers.index)
+    else:
+        layer_filter = layers["origin"] == origin
+        export_layers = list(layers[layer_filter].index)
+
+    layermap = {layer:layer for layer in export_layers}
+    return layermap
+
+
+# ==============================================================================
 # Show or get tables
-#==============================================================================
+# ==============================================================================
 def get_layers():
     """Get predefined selection of columns from layer_table DataFrame.
 
@@ -1209,7 +1256,7 @@ def show_xsections():
     Returns:
         None
     """
-    #print('-------------------------------')
+    # print('-------------------------------')
     print('xsections:')
     if not cfg.xsection_table.empty:
         pprint(cfg.xsection_table[xsection_table_attr])
@@ -1219,11 +1266,11 @@ def show_xsections():
 
 def show_layers():
     """Print the layer table."""
-    #print('-------------------------------')
-    #print("DataFrame 'cfg.layer_table' with layer definitions:")
+    # print('-------------------------------')
+    # print("DataFrame 'cfg.layer_table' with layer definitions:")
     print("layers:")
     try:
-        #df = cfg.layer_table[['layer_name', 'layer', 'datatype', 'tech', 'accuracy']]
+        # df = cfg.layer_table[['layer_name', 'layer', 'datatype', 'tech', 'accuracy']]
         df = cfg.layer_table
         pprint(df)
     except:
@@ -1232,8 +1279,8 @@ def show_layers():
 
 def show_layercolors():
     """Print the layercolor table."""
-    #print('-------------------------------')
-    #print("DataFrame 'cfg.layer_table' with layer definitions:")
+    # print('-------------------------------')
+    # print("DataFrame 'cfg.layer_table' with layer definitions:")
     print("layercolors:")
     df = cfg.colors[['fill_color', 'frame_color', 'width']]
     pprint(df)
@@ -1245,12 +1292,12 @@ def show_xsection_layer_map():
     Returns:
         None
     """
-    #print('-------------------------------')
+    # print('-------------------------------')
     print("xsection-layer_map:")
     if not cfg.xsection_layer_map.empty:
         df = cfg.xsection_layer_map[['xsection', 'layer_name', 'growx', 'growy']]
         pprint(df)
-        #return df
+        # return df
     else:
         print('No xs defined.')
 
@@ -1261,17 +1308,13 @@ def show_mask_layers():
     Returns:
         None
     """
-    #print('-------------------------------')
-    #print("Dictionary of DataFrames 'cfg.xs_layers' with the description of each xs:")
+    # print('-------------------------------')
+    # print("Dictionary of DataFrames 'cfg.xs_layers' with the description of each xs:")
     columns = ['layer_name', 'layer', 'datatype', 'tech', 'growx', 'growy', 'accuracy']
     print("mask_layers:")
     for xs in cfg.xs_list:
-        #for sorted(cfg.mask_layers.keys()):
-        under = '_'*(29-len(xs))
+        # for sorted(cfg.mask_layers.keys()):
+        under = '_' * (29 - len(xs))
         print("xsection: '{}' {}".format(xs, under))
         pprint(get_xsection(xs).mask_layers.reset_index()[columns])
         print('')
-
-
-
-

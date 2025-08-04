@@ -44,7 +44,7 @@ def Tp_EAM(length=100, width=50,
     Returns:
         function that generates a Cell object
     """
-    @bbu.hashme(name, 'length')
+    @bbu.hashme(name, ['length'])
     def cell(length=length):
         """Create a EAM cell.
 

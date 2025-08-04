@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-#-----------------------------------------------------------------------
+# -----------------------------------------------------------------------
 # This file is part of Nazca.
 #
 # Nazca is free software: you can redistribute it and/or modify
@@ -14,7 +14,7 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with Nazca.  If not, see <http://www.gnu.org/licenses/>.
-#-----------------------------------------------------------------------
+# -----------------------------------------------------------------------
 # (c) 2016 Xaveer Leijtens
 # (c) 2017 Ronald Broeke
 
@@ -81,7 +81,7 @@ elm_open = {
     gb.GDS_record.PATH,
     gb.GDS_record.SREF,
     gb.GDS_record.AREF,
-    gb.GDS_record.TEXT
+    gb.GDS_record.TEXT,
 }
 
 elm_data = {
@@ -97,7 +97,9 @@ elm_data = {
     gb.GDS_record.ANGLE,
     gb.GDS_record.STRING,
     gb.GDS_record.STRANS,
-    gb.GDS_record.COLROW
+    gb.GDS_record.COLROW,
+    gb.GDS_record.PROPATTR,
+    gb.GDS_record.PROPVALUE,
 }
 
 
@@ -112,9 +114,12 @@ def DFS(graph):
     routine does a Depth First Search of all cells and returns an
     topologically sorted list.
     """
+
     def DFS_visit(cell):
         if graph.get(cell, None) is None:
-            raise ValueError(f"Reference found to unavailable cell '{cell}' in gds file.")
+            raise ValueError(
+                f"Reference found to unavailable cell '{cell}' in gds file."
+            )
         for c in graph[cell]:
             if c in start:
                 eprint("Error in GDS\nGraph:", graph)
@@ -125,6 +130,7 @@ def DFS(graph):
                 DFS_visit(c)
                 start.remove(c)
                 order.append(c)
+
     parent = {}
     start = set()
     order = []
@@ -136,41 +142,48 @@ def DFS(graph):
             DFS_visit(c)
             start.remove(c)
             order.append(c)
-#    order.reverse() # Start with top first.
+    #    order.reverse() # Start with top first.
     return order
+
 
 def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
 
-def unpack_uint8(byte1):
-    return int(struct.unpack('>B', byte1)[0])
 
-def unpack_uint16(byte2): # unsigned
-    return int(struct.unpack('>H', byte2)[0])
+def unpack_uint8(byte1):
+    return int(struct.unpack(">B", byte1)[0])
+
+
+def unpack_uint16(byte2):  # unsigned
+    return int(struct.unpack(">H", byte2)[0])
+
 
 def unpack_int16(byte2):
-    return int(struct.unpack('>h', byte2)[0])
+    return int(struct.unpack(">h", byte2)[0])
+
 
 def unpack_int32(byte4):
-    return int(struct.unpack('>l', byte4)[0])
+    return int(struct.unpack(">l", byte4)[0])
+
 
 # 4-byte real is not used.
 
 
 def unpack_real8(byte8):
-    if byte8 == b'00000000':
+    if byte8 == b"00000000":
         return 0.0
     # value = M / 2**56 * 16**(E - 64)
     #       = M * 16**(E - 64 - 56/4)
     #       = M * 16**(E - 78)
-    E, M6, M54, M3210 = struct.unpack(">BBHL",byte8) # 1, 1, 2, 4 bytes
+    E, M6, M54, M3210 = struct.unpack(">BBHL", byte8)  # 1, 1, 2, 4 bytes
     if E & 0x80:
         sign = -1
     else:
         sign = 1
-    E = (E & 0x7f) - 78
+    E = (E & 0x7F) - 78
     M = M6 * 0x1000000000000 + M54 * 0x100000000 + M3210
     return float(sign * M * (16**E))
+
 
 def nx_uint8(strm):
     f = io.BytesIO(strm)
@@ -181,6 +194,7 @@ def nx_uint8(strm):
         else:
             break
 
+
 def nx_int16(strm):
     f = io.BytesIO(strm)
     while True:  # Can be a stream with a number of 2-byte values
@@ -190,6 +204,7 @@ def nx_int16(strm):
         else:
             break
 
+
 def nx_int32(strm):
     f = io.BytesIO(strm)
     while True:  # Can be a stream with a number of 4-byte values
@@ -198,6 +213,7 @@ def nx_int32(strm):
             yield unpack_int32(byte4)
         else:
             break
+
 
 def nx_real8(strm):
     f = io.BytesIO(strm)
@@ -214,7 +230,7 @@ class GDSII_cell:
 
     A cell contains three attributes that constitute all cell content
         -header stream
-        -list of element objects (sref, polygon, polyline, etc)
+        -list of element objects (sref, polygon (boundary), polyline (path), etc (see elm_open))
         -set of cell references <snames>
         -footer stream
     """
@@ -226,7 +242,9 @@ class GDSII_cell:
             None
         """
         self.snames = set()
-        self.count_srefs = defaultdict(int)  # keep track of number of references to cells
+        self.count_srefs = defaultdict(
+            int
+        )  # keep track of number of references to cells
         self.header = []
         self.elements = []
         self.footer = GDSII_record(gb.gds_endstr())
@@ -235,9 +253,14 @@ class GDSII_cell:
     def __str__(self):
         """String representation of the cell."""
 
-        return str('\n'+'\n'.join(str(h) for h in self.header) + '\n' +
-            '\n'.join(str(elem) for elem in self.elements) + '\n' +
-            str(self.footer))
+        return str(
+            "\n"
+            + "\n".join(str(h) for h in self.header)
+            + "\n"
+            + "\n".join(str(elem) for elem in self.elements)
+            + "\n"
+            + str(self.footer)
+        )
 
     def references(self, sname):
         """Add a cell reference <sname> to the cell.
@@ -280,9 +303,11 @@ class GDSII_cell:
         Returns:
             bytearray: stream of the cell
         """
-        return b''.join(h.stream for h in self.header) + \
-               b''.join(e.stream for e in self.elements) + \
-               self.footer.stream
+        return (
+            b"".join(h.stream for h in self.header)
+            + b"".join(e.stream for e in self.elements)
+            + self.footer.stream
+        )
 
 
 class GDSII_element:
@@ -315,7 +340,7 @@ class GDSII_element:
         self.records = list(records)  # force copy
 
     def __str__(self):
-        return '\n'.join(str(rec) for rec in self.records)
+        return "\n".join(str(rec) for rec in self.records)
 
     def addrecord(self, record):
         """Add a GDSII-record to the GDSII_element.
@@ -335,7 +360,7 @@ class GDSII_element:
         Returns:
             bytearray: gds stream
         """
-        return b''.join(rec.stream for rec in self.records)
+        return b"".join(rec.stream for rec in self.records)
 
     @property
     def etype(self):
@@ -420,43 +445,18 @@ class GDSII_element:
         return [(layer, datatype), XY]
 
     @property
-    def box(self):
-        """Get the properties of a box element.
-
-        Returns None if the element is not an annotation.
-
-        Returns:
-            [int, tuple, str]: layer, position (x, y)
-        """
-        # GDS: BOX [ELFLAGS] [PLEX] LAYER BOXTYPE XY
-        if self.etype != gb.GDS_record.TEXT:
-            return None
-        layer, boxtype, XY = None, None, None
-        for r in self.records[1:]:
-            if r.rtype == gb.GDS_record.LAYER:
-                layer = r.data[0]
-            elif r.rtype == gb.GDS_record.BOXTYPE:
-                boxtype = r.data[0]
-            elif r.rtype == gb.GDS_record.XY:
-                XY = r.data
-        # box has a BOXTYPE, not a DATATYPE
-        return [(layer, 0), XY]
-
-    @property
     def instance(self):
         """Get the properties of a SREF element.
 
         Returns:
-            [int, tuple, str]: layer, position (x, y), text
+            [int, tuple, str]: layer, position (x, y), text, cnt, prop
         """
-        # GDS: SREF [ELFLAGS] [PLEX] SNAME [<strans>] XY
-        #     <strans: STRANS [MAG] [ANGLE]
         if self.etype != gb.GDS_record.SREF:
-           return None
-        sname, strans, mag, angle, XY = None, 0, 1.0, 0.0, None
+            return None
+        sname, strans, mag, angle, XY, cnt, prop = None, 0, 1.0, 0.0, None, None, None
         for r in self.records[1:]:
             if r.rtype == gb.GDS_record.SNAME:
-                sname= r.data
+                sname = r.data
             elif r.rtype == gb.GDS_record.STRANS:
                 if r.data[0] & 0x8000:
                     strans = 1
@@ -466,7 +466,11 @@ class GDSII_element:
                 angle = r.data[0]
             elif r.rtype == gb.GDS_record.XY:
                 XY = r.data
-        return [sname, strans, mag, angle, XY]
+            elif r.rtype == gb.GDS_record.PROPATTR:
+                cnt = r.data[0]
+            elif r.rtype == gb.GDS_record.PROPVALUE:
+                prop = r.data
+        return [sname, strans, mag, angle, XY, cnt, prop]
 
     @property
     def array(self):
@@ -475,16 +479,23 @@ class GDSII_element:
         Returns:
             [int, tuple, str]: layer, position (x, y), text
         """
-        # GDS: SREF [ELFLAGS] [PLEX] SNAME [<strans>] XY
-        #     <strans: STRANS [MAG] [ANGLE]
         if self.etype != gb.GDS_record.AREF:
             return None
-        sname, strans, mag, angle, col, row, XY = None, None, 1.0, None, None, None, None
+        sname, strans, mag, angle, col, row, XY = (
+            None,
+            0,
+            1.0,
+            None,
+            None,
+            None,
+            None,
+        )
         for r in self.records[1:]:
             if r.rtype == gb.GDS_record.SNAME:
-                sname= r.data
+                sname = r.data
             elif r.rtype == gb.GDS_record.STRANS:
-                strans = r.data
+                if r.data[0] & 0x8000:
+                    strans = 1
             elif r.rtype == gb.GDS_record.MAG:
                 mag = r.data[0]
             elif r.rtype == gb.GDS_record.ANGLE:
@@ -527,26 +538,27 @@ class GDSII_record:
     def __str__(self):
         """String representation of the record."""
         if self.rtype in elm_open:
-            e = '\n┌'
-            d = '│'
+            e = "\n┌"
+            d = "│"
         elif self.rtype in elm_data:
-            e = '├'
-            d = '│'
+            e = "├"
+            d = "│"
         elif self.rtype == gb.GDS_record.ENDEL:
-            e = '└'
+            e = "└"
         else:
-            e = ''
-            d = ''
+            e = ""
+            d = ""
 
-        s = '{}{}, {}, 4+{} bytes'.format(
+        s = "{}{}, {}, 4+{} bytes".format(
             e,
             gb.GDS_record.name[self.rtype],
             gb.GDS_datatype.name[self.dtype],
-            self.rlen - 4)
+            self.rlen - 4,
+        )
         if self.dtype == gb.GDS_datatype.ASCII:
             s += '\n{} "{}"'.format(d, self.data)
         elif self.dtype != gb.GDS_datatype.NODATA:
-            s += '\n{} {}'.format(d, self.data)
+            s += "\n{} {}".format(d, self.data)
 
         return s
 
@@ -558,7 +570,7 @@ class GDSII_record:
         make sense and there are GDSII files with large (> 0x8000) record
         lengths. By using unsigned here (uint16), we can also read those files.
         """
-        return unpack_uint16(self.strm[self.pos:self.pos+2])
+        return unpack_uint16(self.strm[self.pos : self.pos + 2])
 
     @property
     def rtype(self):
@@ -567,7 +579,7 @@ class GDSII_record:
         Returns:
             uint8: record-type value
         """
-        return unpack_uint8(self.strm[self.pos+2:self.pos+3])
+        return unpack_uint8(self.strm[self.pos + 2 : self.pos + 3])
 
     @property
     def dtype(self):
@@ -576,7 +588,7 @@ class GDSII_record:
         Returns:
             uint8: data-type value
         """
-        return unpack_uint8(self.strm[self.pos+3:self.pos+4])
+        return unpack_uint8(self.strm[self.pos + 3 : self.pos + 4])
 
     @property
     def data(self):
@@ -588,21 +600,21 @@ class GDSII_record:
         if self.dtype == gb.GDS_datatype.NODATA:
             return None
         elif self.dtype == gb.GDS_datatype.BITARRAY:
-            return list(nx_int16(self.strm[self.pos+4:self.pos+6]))
+            return list(nx_int16(self.strm[self.pos + 4 : self.pos + 6]))
         elif self.dtype == gb.GDS_datatype.INT16:
-            return list(nx_int16(self.strm[self.pos+4:self.pos+self.rlen]))
+            return list(nx_int16(self.strm[self.pos + 4 : self.pos + self.rlen]))
         elif self.dtype == gb.GDS_datatype.INT32:
-            return list(nx_int32(self.strm[self.pos+4:self.pos+self.rlen]))
+            return list(nx_int32(self.strm[self.pos + 4 : self.pos + self.rlen]))
         elif self.dtype == gb.GDS_datatype.REAL8:
-            return list(nx_real8(self.strm[self.pos+4:self.pos+self.rlen]))
+            return list(nx_real8(self.strm[self.pos + 4 : self.pos + self.rlen]))
         elif self.dtype == gb.GDS_datatype.ASCII:
-            if self.strm[self.pos+self.rlen-1]:  # Remove last 0 byte padding
+            if self.strm[self.pos + self.rlen - 1]:  # Remove last 0 byte padding
                 e = self.pos + self.rlen
             else:
                 e = self.pos + self.rlen - 1
-            return self.strm[self.pos+4:e].decode('utf-8')
+            return self.strm[self.pos + 4 : e].decode("utf-8")
         else:
-            raise GDSII_Error('Unknown data type {}'.format(self.dtype))
+            raise GDSII_Error("Unknown data type {}".format(self.dtype))
 
     @property
     def stream(self):
@@ -611,7 +623,7 @@ class GDSII_record:
         Return:
             bytearray: record
         """
-        return self.strm[self.pos:self.pos + self.rlen]
+        return self.strm[self.pos : self.pos + self.rlen]
 
 
 class GDSII_stream:
@@ -664,14 +676,17 @@ class GDSII_stream:
         self.cellmap = {}
         self.gds_db_user = None
         self.gds_db_unit = None
+        self.remove_duplicate_cells = (
+            True  # remove duplicate cells having duplicate cell names.
+        )
 
         if isinstance(filename, str):
             self.filename = filename
-            with open(filename, 'rb') as f:
+            with open(filename, "rb") as f:
                 self.gds_stream = bytearray(f.read())
             # eprint("Read GDS from '{}'".format(filename))
         else:
-            self.filename = '<buffer>'
+            self.filename = "<buffer>"
             self.gds_stream = filename
             # eprint("Read GDS from buffer")
         self.stream_length = len(self.gds_stream)  # stream length in bytes.
@@ -686,7 +701,6 @@ class GDSII_stream:
                 self.graph[c] = self.cells[c].snames
             # This will check for cyclic references as well
             self.order = DFS(self.graph)
-
 
     def create_layermap(self, layermap, layermapmode):
         """Create a valid internal layermap from the provided <layermap>.
@@ -715,7 +729,6 @@ class GDSII_stream:
         self.layermap = layermap_copy
         return None
 
-
     def create_cellmap(self, cellmap):
         """Create a valid internal cellmap from the provided <cellmap>.
 
@@ -734,14 +747,12 @@ class GDSII_stream:
                 self.cellmap[cell] = cellmap[cell]
         return None
 
-
     def count_srefs(self):
         """Print how many times cells have been instantiated to stdout."""
         for cellname, cell in sorted(self.cells.items()):
             print("{}:".format(cellname))
             for sref, count in sorted(cell.count_srefs.items()):
                 print("   {:4d}x {}".format(count, sref))
-
 
     def GDSII_write(self, filename):
         """Write a GDSII stream to file.
@@ -752,9 +763,9 @@ class GDSII_stream:
         Return:
             None
         """
-        with open(filename, 'wb') as f:
-            f.write(b''.join(rec.stream for rec in self.header))
-            if self.cell_remove == set(): # No cells were removed
+        with open(filename, "wb") as f:
+            f.write(b"".join(rec.stream for rec in self.header))
+            if self.cell_remove == set():  # No cells were removed
                 for cellname in self.cells:
                     f.write(self.cells[cellname].stream)
             else:
@@ -762,7 +773,6 @@ class GDSII_stream:
                     # Write the topcell trees
                     self.GDSII_write_cell_and_under(f, cellname)
             f.write(self.footer.stream)
-
 
     def ASCII_write(self, filename=False):
         """Write the GDS in a human readable format.
@@ -778,20 +788,19 @@ class GDSII_stream:
         """
         buf = io.StringIO()
         for rec in self.header:
-            buf.write(str(rec)+'\n')
+            buf.write(str(rec) + "\n")
         for cellname in self.cells:
             if cellname not in self.cell_remove:
-                buf.write(str(self.cells[cellname])+'\n')
-        buf.write(str(self.footer)+'\n')
-        if filename is False: # Write to stdout
+                buf.write(str(self.cells[cellname]) + "\n")
+        buf.write(str(self.footer) + "\n")
+        if filename is False:  # Write to stdout
             sys.stdout.write(buf.getvalue())
-        elif filename is None: # Don't write, only return the string.
+        elif filename is None:  # Don't write, only return the string.
             pass
         else:
-            with open(filename, 'w', encoding='utf-8') as f:
+            with open(filename, "w", encoding="utf-8") as f:
                 f.write(buf.getvalue())
         return buf.getvalue()
-
 
     def _GDSII_stream_cell_and_under(self, strm, cellname, init=True):
         """Obtain a GDS stream of cell named <cellname>, and its children.
@@ -813,15 +822,17 @@ class GDSII_stream:
             try:
                 strm.extend(self.cells[cellname].stream)
             except:
-                raise Exception("Error: Looking up a non-existing cellname '{}' "\
-                    "in file '{}'. Valid cellnames are {}."\
-                    .format(cellname, self.filename, list(self.cells.keys())))
+                raise Exception(
+                    "Error: Looking up a non-existing cellname '{}' "
+                    "in file '{}'. Valid cellnames are {}.".format(
+                        cellname, self.filename, list(self.cells.keys())
+                    )
+                )
             done.append(cellname)
 
         for subcellname in self.cells[cellname].snames:
             self._GDSII_stream_cell_and_under(strm, subcellname, init=False)
         return strm
-
 
     def GDSII_stream_cell(self, cellname):
         """Return the GDSII stream of the cell with name <cellname> and below.
@@ -832,9 +843,7 @@ class GDSII_stream:
         Returns:
             bytearray: gds stream
         """
-        return self._GDSII_stream_cell_and_under(bytearray(), cellname,
-            init=True)
-
+        return self._GDSII_stream_cell_and_under(bytearray(), cellname, init=True)
 
     def _GDSII_write_cell_and_under(self, f, cellname, init=True):
         """Write gds stream of cell named <cellname> to file <f>.
@@ -860,7 +869,6 @@ class GDSII_stream:
         for subcellname in self.cells[cellname].snames:
             self._GDSII_write_cell_and_under(f, subcellname, False)
 
-
     def GDSII_write_cell(self, cellname, filename):
         """Write a cell (and the cells referenced by it).
 
@@ -871,11 +879,10 @@ class GDSII_stream:
         Returns:
             None
         """
-        with open(filename, 'wb') as f:
-            f.write(b''.join(rec.stream for rec in self.header))
+        with open(filename, "wb") as f:
+            f.write(b"".join(rec.stream for rec in self.header))
             self.GDSII_write_cell_and_under(f, cellname)
             f.write(self.footer.stream)
-
 
     def topcell(self):
         """Get all topcells in the stream.
@@ -888,28 +895,29 @@ class GDSII_stream:
         cells = set(self.cells.keys())
         return cells - self.snames
 
-
     def cell_branch(self, cellname, cellnames=None, level=0):
         """Create a set of cellnames of all cells in branch <cellname>.
 
         Returns:
             set: cellnames
         """
-        #TODO: check if is this the same function(ality) as GDSII_stream_cell?
+        # TODO: check if is this the same function(ality) as GDSII_stream_cell?
         if level == 0:
             cellnames = set()
         cellnames.add(cellname)
 
         if cellname not in list(self.cells.keys()):
-            raise Exception("Error: Looking up a non-existing cellname '{}' "\
-                "in file '{}'. Valid cellnames are {}.".\
-                    format(cellname, self.filename, list(self.cells.keys())))
+            raise Exception(
+                "Error: Looking up a non-existing cellname '{}' "
+                "in file '{}'. Valid cellnames are {}.".format(
+                    cellname, self.filename, list(self.cells.keys())
+                )
+            )
         for subname in self.cells[cellname].snames:
-            self.cell_branch(subname, cellnames, level+1)
+            self.cell_branch(subname, cellnames, level + 1)
         level -= 1
         if level == -1:
             return cellnames
-
 
     def _print_structure(self, name, level=0, sort=False):
         """Print the cell tree in ascii format.
@@ -925,15 +933,14 @@ class GDSII_stream:
         if level == 0:
             print("□", name)
         else:
-            print("  {}└{}".format("│ " * (level-1), name))
-            #TODO remove one '|' if last cell in a branch starts a deeper level.
+            print("  {}└{}".format("│ " * (level - 1), name))
+            # TODO remove one '|' if last cell in a branch starts a deeper level.
         if sort:
             snames = sorted(self.cells[name].snames)
         else:
             snames = self.cells[name].snames
         for sub in snames:
-            self._print_structure(sub, level+1)
-
+            self._print_structure(sub, level + 1)
 
     def print_structure(self, name=None, sort=False):
         """Print the cell tree in ascii format.
@@ -951,9 +958,8 @@ class GDSII_stream:
             names = [name]
         for i, name in enumerate(names):
             if len(names) > 1:
-                print('topcell-{}:'.format(i))
+                print("topcell-{}:".format(i))
             self._print_structure(name, sort)
-
 
     def _gds_cell_iter(self, rec_iter):
         """Generator to iterate over all cells with cell and layer mapping applied.
@@ -979,15 +985,20 @@ class GDSII_stream:
         Yields:
             GDSII_cell: next cell object in rec_iter after mapping
         """
+        cellnames = set()
         for rec, pos in rec_iter:
-            if rec.rtype == gb.GDS_record.ENDLIB: # End of file.
+            flag_duplicate = False
+            if rec.rtype == gb.GDS_record.ENDLIB:  # End of file.
                 break
             cell = GDSII_cell(pos)
 
             # Read BGNSTR
             if rec.rtype != gb.GDS_record.BGNSTR:
-                raise GDSII_Error("'BGNSTR' record expected. Got '{}'.".format(
-                    gb.GDS_record.name[rec.rtype]))
+                raise GDSII_Error(
+                    "'BGNSTR' record expected. Got '{}'.".format(
+                        gb.GDS_record.name[rec.rtype]
+                    )
+                )
             cell.header.append(rec)
 
             # Read STRNAME
@@ -995,6 +1006,13 @@ class GDSII_stream:
             if rec.rtype != gb.GDS_record.STRNAME:
                 raise GDSII_Error("STRNAME record expected")
             cellname = rec.data
+            if cellname in cellnames:
+                if not self.remove_duplicate_cells:
+                    print(
+                        f"Warning: found duplicate cellname '{cellname}' in input stream."
+                    )
+                flag_duplicate = True
+            cellnames.add(cellname)
 
             if cellname in self.cellmap:
                 if self.cellmap[cellname] is not None:
@@ -1007,8 +1025,10 @@ class GDSII_stream:
             # Loop over this cell's elements
             for elem in self._gds_elem_iter(rec_iter, cell):
                 cell.addelem(elem)
+            if self.remove_duplicate_cells and flag_duplicate:
+                print(f"Removed duplicate cellname '{cellname}' from input stream.")
+                continue
             yield cell
-
 
     def _gds_elem_iter(self, rec_iter, cell):
         """Generator over all GDS elements in <rec_iter> within <cell>
@@ -1017,7 +1037,7 @@ class GDSII_stream:
         they will be applied here.
 
         Record iterator rec_iter is the thread along which GDS elements are
-        rebuild and stored internally in an element dictionary.
+        rebuilt and stored internally in an element dictionary.
         This Generator provides an element iterator and maps layer, datatype
         and cell reference names as specified in class attributes
         'layermap' and 'cellmap', before yielding.
@@ -1042,14 +1062,15 @@ class GDSII_stream:
             # DATATYPE after LAYER: boundary, path
             # TEXTTYPE after LAYER: annotation
             # BOXTYPE after LAYER: box
-            elif (rec.rtype == gb.GDS_record.DATATYPE) or \
-                 (rec.rtype == gb.GDS_record.TEXTTYPE) or \
-                 (rec.rtype == gb.GDS_record.BOXTYPE):
+            elif (
+                (rec.rtype == gb.GDS_record.DATATYPE)
+                or (rec.rtype == gb.GDS_record.TEXTTYPE)
+                or (rec.rtype == gb.GDS_record.BOXTYPE)
+            ):
                 dtype = rec.data[0]
                 layID = (lay, dtype)
-                if (
-                    layID in self.layer_remove
-                    or (layID not in self.layermap and self.layermapmode == 'none')
+                if layID in self.layer_remove or (
+                    layID not in self.layermap and self.layermapmode == "none"
                 ):
                     # Remove this element: read until ENDEL and delete/recreate elem
                     for rec2, pos in rec_iter:
@@ -1057,7 +1078,7 @@ class GDSII_stream:
                             elem = GDSII_element()
                             break
                     continue
-                if layID in self.layermap: # Replace with new layer number.
+                if layID in self.layermap:  # Replace with new layer number.
                     LDT = self.layermap[layID]
                     if cfg.gds_over_getlayer:
                         LDT = cfg.layername2LDT[get_layer(LDT)][0:2]
@@ -1071,37 +1092,49 @@ class GDSII_stream:
                 elif rec.rtype == gb.GDS_record.TEXTTYPE:
                     rec2 = GDSII_record(gb.gds_texttype(dat1))
                 elif rec.rtype == gb.GDS_record.BOXTYPE:
-                    rec2 = GDSII_record(gb.gds_boxtype(dat1))
+                    # Box has 5 coordinates, with first and last coinciding.
+                    # That is identical to a boundary with 4 points, so we'll just
+                    # replace the box with boundary (insert datatype, not boxtype).
+                    rec2 = GDSII_record(gb.gds_datatype(dat1))
                 elem.addrecord(rec1)
                 elem.addrecord(rec2)
-                lay = -1 #reset layer for next loop
+                lay = -1  # reset layer for next loop
                 continue
 
-            #instance name mapping:
-            elif rec.rtype == gb.GDS_record.SNAME: # Reference to other cell.
-                if rec.data in self.cell_remove: # Remove reference
-                    cell.references(rec.data) # But still record the reference.
+            # instance name mapping:
+            elif rec.rtype == gb.GDS_record.SNAME:  # Structure name: Reference to other cell.
+                if rec.data in self.cell_remove:  # Remove reference
+                    cell.references(rec.data)  # But still record the reference.
                     # Remove this element: read until ENDEL and delete.
                     for rec2, pos in rec_iter:
                         if rec2.rtype == gb.GDS_record.ENDEL:
-                            elem = GDSII_element()
+                            elem = GDSII_element()  # New empty element
                             break
                     continue
                 if rec.data in self.cellmap:
                     rec = GDSII_record(gb.gds_sname(self.cellmap[rec.data]))
                 cell.references(rec.data)
-
-            elif rec.rtype == gb.GDS_record.ENDEL: # End of element.
-                elem.addrecord(rec)
-                yield elem
-                elem = GDSII_element() # New element
+            elif rec.rtype == gb.GDS_record.PROPATTR:
+                elem.addrecord(GDSII_record(gb.gds_propattr(rec.data[0])))
+                continue
+            elif rec.rtype == gb.GDS_record.PROPVALUE:
+                elem.addrecord(GDSII_record(gb.gds_propvalue(rec.data)))
                 continue
 
-            elif rec.rtype == gb.GDS_record.ENDSTR: # Last element (cell footer)
-                break # End of elements for this cell.
+            elif rec.rtype == gb.GDS_record.ENDEL:  # End of element.
+                elem.addrecord(rec)
+                yield elem
+                elem = GDSII_element()  # New empty element
+                continue
 
-            elem.addrecord(rec) #transparent record copy
+            elif rec.rtype == gb.GDS_record.ENDSTR:  # Last element (cell footer)
+                break  # End of elements for this cell.
 
+            elif rec.rtype == gb.GDS_record.BOX:  # Box to boundary
+                elem.addrecord(GDSII_record(gb.gds_boundary()))
+                continue
+
+            elem.addrecord(rec)  # transparent record copy
 
     def gds_record_iter(self, strm, strmlen, pos=0):
         """Generator over the cell records.
@@ -1118,7 +1151,6 @@ class GDSII_stream:
             rec = GDSII_record(strm, pos)
             yield rec, pos
             pos += rec.rlen
-
 
     def parse(self):
         """Find all the cells in a GDS and add them to an internal dictionary.
@@ -1138,13 +1170,12 @@ class GDSII_stream:
             if rec.rtype == gb.GDS_record.UNITS:
                 self.gds_user = rec.data[0]
                 self.gds_db_unit = rec.data[1]
-                break # last record of header
+                break  # last record of header
 
         # Read all the cells, ends on ENDLIB record (end of file).
         for cell in self._gds_cell_iter(rec_iter):
             # Add cell reference
             self.cells[cell.name] = cell
-
 
     @property
     def libname(self):
@@ -1152,8 +1183,7 @@ class GDSII_stream:
             if rec.rtype == gb.GDS_record.LIBNAME:
                 return str(rec.data)
         else:
-            return None # No LIBNAME record in GDS file header
-
+            return None  # No LIBNAME record in GDS file header
 
     @property
     def gdsversion(self):

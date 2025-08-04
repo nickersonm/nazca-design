@@ -1,4 +1,4 @@
-#-----------------------------------------------------------------------
+# -----------------------------------------------------------------------
 # This file is part of Nazca.
 #
 # Nazca is free software: you can redistribute it and/or modify
@@ -13,7 +13,7 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with Nazca.  If not, see <http://www.gnu.org/licenses/>.
-#-----------------------------------------------------------------------
+# -----------------------------------------------------------------------
 #
 # Higher level GDS routines.
 #
@@ -45,15 +45,14 @@ Example:
 """
 
 from . import gds_base as gbase
-from .version import __version__
+from nazca import __version__
 
 # Bit states for the STRANS Bit Array.
-GDS_BIT_REFLECT  = 0x8000
-GDS_BIT_ABSMAGN  = 0x0004
+GDS_BIT_REFLECT = 0x8000
+GDS_BIT_ABSMAGN = 0x0004
 GDS_BIT_ABSANGLE = 0x0002
 
-__all__ = ["layout_open", "cell_open", "layout_close", "cell_close",
-           "cell_reference"]
+__all__ = ["layout_open", "cell_open", "layout_close", "cell_close", "cell_reference"]
 
 
 def layout_open(name=None):
@@ -67,10 +66,12 @@ def layout_open(name=None):
     """
     if name is None:
         name = 'Nazca {}'.format(__version__)
-    strm = gbase.gds_header() \
-         + gbase.gds_bgnlib() \
-         + gbase.gds_libname(name) \
-         + gbase.gds_units()
+    strm = (
+        gbase.gds_header()
+        + gbase.gds_bgnlib()
+        + gbase.gds_libname(name)
+        + gbase.gds_units()
+    )
     return strm
 
 
@@ -89,13 +90,22 @@ def cell_open(name):
 def cell_close():
     """Close a GDS cell.
 
-     Returns:
-        bytestring: stream for cell closure
+    Returns:
+       bytestring: stream for cell closure
     """
     return gbase.gds_endstr()
 
 
-def cell_reference(xy, name, adeg=0, mag=1.0, flip=False, array=None): # angle in degrees
+def cell_reference(
+        xy,
+        name,
+        adeg=0,
+        mag=1.0,
+        flip=False,
+        array=None,
+        propattr=None,
+        propvalue=None,
+    ):
     """Add a cell reference (instance) to a GDS cell.
 
     Args:
@@ -110,16 +120,18 @@ def cell_reference(xy, name, adeg=0, mag=1.0, flip=False, array=None): # angle i
         bytestring: stream for a cell reference
     """
     if array is None:
-        unique = True #flag to remove double polygon points
+        unique = True  # flag to remove double polygon points
         strm = gbase.gds_sref() + gbase.gds_sname(name)
         xy = [xy]
     else:
         unique = False
         strm = gbase.gds_aref() + gbase.gds_sname(name)
         col, row = array[0], array[2]
-        xy = [xy] + \
-             [[xy[0]+array[1][0]*col, xy[1]+array[1][1]*col]] + \
-             [[xy[0]+array[3][0]*row, xy[1]+array[3][1]*row]]
+        xy = (
+            [xy]
+            + [[xy[0] + array[1][0] * col, xy[1] + array[1][1] * col]]
+            + [[xy[0] + array[3][0] * row, xy[1] + array[3][1] * row]]
+        )
 
     # 1. Insert STRANS record if needed. If this record is omitted, the
     #    defaults for the element are no reflection, non-absolute
@@ -140,7 +152,11 @@ def cell_reference(xy, name, adeg=0, mag=1.0, flip=False, array=None): # angle i
         strm += gbase.gds_angle(adeg)
     if array is not None:
         strm += gbase.gds_colrow(col, row)
-    strm += gbase.gds_xy(xy, close=False, unique=unique) + gbase.gds_endel()
+    strm += gbase.gds_xy(xy, close=False, unique=unique)
+    if propvalue is not None:
+        strm += gbase.gds_propattr(1)
+        strm += gbase.gds_propvalue(propvalue)
+    strm += gbase.gds_endel()
     return strm
 
 

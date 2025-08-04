@@ -48,7 +48,7 @@ def Tp_EOPM_DC(
     Returns:
         function that generates a Cell object
     """
-    @bbu.hashme(name, 'length', 'contacts', 'pads',)
+    @bbu.hashme(name, ['length', 'contacts', 'pads',])
     def cell(length=length, contacts=contacts):
         """Create an electro-optical phase modulator (EOPM) cell.
 
@@ -117,7 +117,7 @@ def Tp_EOPM_RF(
     Returns:
         function returning a cell: eopm(length, pad, padangle1, padangle2)
     """
-    @bbu.hashme(name, 'length', 'pads')
+    @bbu.hashme(name, ['length', 'pads'])
     def cell(length=length, pads=pads):
         """Create a EOPM_RF cell.
 

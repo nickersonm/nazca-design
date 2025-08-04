@@ -31,6 +31,7 @@ information.
 """
 import nazca.cfg as cfg
 from nazca.logging import logger
+from nazca.util import boundingbox
 
 try:
     import pyclipper as pc
@@ -50,9 +51,6 @@ try:
 except Exception:  # as e:
     cfg.PYCLIPPER = False
     # print('Warning: Could not import pyclipper:', e)
-if cfg.PYCLIPPER:
-    st = pc.scale_to_clipper
-    sf = pc.scale_from_clipper
 
 
 clipper_check = False
@@ -75,28 +73,6 @@ def _has_pyclipper():
             )
             clipper_check = True
         return False
-
-
-def signed_area(XY):
-    """Calculate and return the signed area of a polygon: negative is
-    counter_clockwise. Polygon should be closed (start and end point should be
-    the same).
-
-    This is a general purpose routine. It may deviate from the area of the
-    finally drawn GDS polygon, because it does not take into account the GDS
-    gridding.
-
-    Args:
-        XY (list): polygon, a list of (x, y) coordinates.
-
-    Returns: (float)
-    """
-    area = 0
-    ox, oy = XY[0]
-    for x, y in XY[1:]:
-        area += x * oy - y * ox
-        ox, oy = x, y
-    return area / 2
 
 
 def _x_intersect(xy0, xy1, ya):
@@ -153,10 +129,10 @@ def _subtract_polygon(XYo, XYi):
     Returned is the combined polygon.
 
     Args:
-        XYo (TODO): TODO
-        XYi (TODO): TODO
+        XYo (list): polygon, a list of (x, y) coordinates.
+        XYi (list): polygon, a list of (x, y) coordinates.
 
-    Returns: list
+    Returns: list (the resulting polygon)
     """
     # The polygons should be closed.
     if XYo[0] != XYo[-1]:
@@ -177,21 +153,43 @@ def _subtract_polygon(XYo, XYi):
             # Calculate distance to intersection point
             xi = _x_intersect((xo, yo), (x, y), yp)
             d = xp - xi
-            if d > 0 and d < dmin:
+            if d >= 0 and d < dmin:
                 dmin = d
                 ndxo = i + 1
                 point = (xi, yp)
         xo, yo = x, y
     # Construct polygon
-    poly = XYo[0:ndxo] + [point] + XYi[ndxi:] + XYi[0:ndxi + 1] + [point] + XYo[ndxo:]
+    poly = XYo[0:ndxo] + [point] + XYi[ndxi:] + XYi[0 : ndxi + 1] + [point] + XYo[ndxo:]
     return poly
+
+
+def _is_inside(inner, outer):
+    """Return True if at least one point of inner is inside outer.
+    This is NOT a general purpose routine.
+
+    The polygons are returned from merge_polygons. If one point from inner is inside
+    outer, the full polygon should be. Some points of inner and outer may coincide.
+
+    Args:
+        inner (list): polygon, a list of (x, y) coordinates.
+        outer (list): polygon, a list of (x, y) coordinates.
+
+    Returns: bool, True if innner is inside outer, False otherwise.
+    """
+    for xy in inner:
+        res = pc.PointInPolygon(xy, outer)
+        # PointInPolygon(pt, poly) returns 0 if outside, -1 if pt is on poly and
+        # +1 if pt is in poly.
+        if res >= 0:  # Should be true for first or second point.
+            return res > 0
+    return False  # All points coincide (should not happen)
 
 
 def _clipper2GDS(clipper_result):
     """Cleanup the clipper polygons for GDS use. The clipper_result consists of
     a list of polygons with clockwise or counter_clockwise orientation. This
-    routing will convert this into a polygon which may contain holes in a way
-    compatible with GDS: holes will have a 'tether' to the outside of the
+    routine will convert this into a polygon which may contain holes in a way
+    compatible with GDS: holes will have a tether to the outside of the
     polygon.
     Note that the input is assumed to be in clipper coordinates. Severe
     rounding will occur if that is not the case.
@@ -220,20 +218,42 @@ def _clipper2GDS(clipper_result):
             inner.append(p)
     # Sort inner polygons by their leftmost x-coordinate
     inner = sorted(inner, key=_poly_xmin)
+    # For efficiency: keep the boundingbox of each polygon.
+    outerbb = []
+    innerbb = []
+    for p in outer:
+        outerbb.append(boundingbox(p))
+    for p in inner:
+        innerbb.append(boundingbox(p))
+
+    def _maybe_inside(outerbb, innerbb):
+        # xmin, ymin, xmax, ymax
+        if (
+            outerbb[0] <= innerbb[0]
+            and outerbb[2] >= innerbb[2]
+            and outerbb[1] <= innerbb[1]
+            and outerbb[3] >= innerbb[3]
+        ):
+            return True
+        else:
+            return False
 
     todo = set(range(len(inner)))  # Keep track of holes that need to be done.
     result = []
     for j, po in enumerate(outer):
-        for i, pi in enumerate(inner):  # Remove each hole from the outer polygon
-            if i in todo and pc.PointInPolygon(pi[0], po):
+        removed = set()
+        for i in todo:  # remove each hole that is inside the outer polygon
+            pi = inner[i]
+            if _maybe_inside(outerbb[j], innerbb[i]) and _is_inside(pi, po):
                 # Subtract with tether.
                 po = _subtract_polygon(po, pi)
-                todo.remove(i)
+                removed.add(i)
+        todo = todo - removed
         result.append(po)
 
     if todo:
         print(
-            f"Not all polygons used...{len(todo)+1} remaining!\n"
+            f"Not all polygons used...{len(todo)} remaining!\n"
             "This is an error that can be caused by an accuracy that is "
             "set to a too large value."
         )
@@ -257,19 +277,16 @@ def merge_polygons(paths, accuracy=1e-8):
         return paths
     sc = 1 / accuracy
     clipper = pc.Pyclipper()
-    # Ensure correct orientation (and remember so we can re-reverse, and do not
-    # change the original polygon).
-    rev = []
+    # Scale before Area() or Orientation() since they operate on integers.
+    paths = pc.scale_to_clipper(paths, sc)
+    # Ensure correct orientation (all counter-clockwise).
     for p in paths:
         if not pc.Orientation(p):
             p.reverse()
-            rev.append(p)
-    clipper.AddPaths(st(paths, sc), pc.PT_SUBJECT, True)
+    clipper.AddPaths(paths, pc.PT_SUBJECT, True)
     mp = clipper.Execute(pc.CT_UNION, pc.PFT_NONZERO, pc.PFT_NONZERO)
     mp = _clipper2GDS(mp)
-    for p in rev:
-        p.reverse()
-    return sf(mp, sc)
+    return pc.scale_from_clipper(mp, sc)
 
 
 def diff_polygons(paths_A, paths_B, accuracy=1e-8):
@@ -288,19 +305,18 @@ def diff_polygons(paths_A, paths_B, accuracy=1e-8):
     if not _has_pyclipper():
         return paths_A + paths_B
     sc = 1 / accuracy
-    rev = []
+    # Scale before Area() or Orientation() since they operate on integers.
+    paths_A = pc.scale_to_clipper(paths_A, sc)
+    paths_B = pc.scale_to_clipper(paths_B, sc)
     for p in paths_A + paths_B:
         if not pc.Orientation(p):
             p.reverse()
-            rev.append(p)
     clipper = pc.Pyclipper()
-    clipper.AddPaths(st(paths_A, sc), pc.PT_SUBJECT, True)
-    clipper.AddPaths(st(paths_B, sc), pc.PT_CLIP, True)
+    clipper.AddPaths(paths_A, pc.PT_SUBJECT, True)
+    clipper.AddPaths(paths_B, pc.PT_CLIP, True)
     sp = clipper.Execute(pc.CT_DIFFERENCE, pc.PFT_NONZERO, pc.PFT_NONZERO)
-    for p in rev:
-        p.reverse()
     sp = _clipper2GDS(sp)
-    return sf(sp, sc)
+    return pc.scale_from_clipper(sp, sc)
 
 
 def clip_polygons(paths_A, paths_B, accuracy=1e-8):
@@ -320,18 +336,17 @@ def clip_polygons(paths_A, paths_B, accuracy=1e-8):
         return paths_A + paths_B
     sc = 1 / accuracy
     clipper = pc.Pyclipper()
-    rev = []
+    # Scale before Area() or Orientation() since they operate on integers.
+    paths_A = pc.scale_to_clipper(paths_A, sc)
+    paths_B = pc.scale_to_clipper(paths_B, sc)
     for p in paths_A + paths_B:
         if not pc.Orientation(p):
             p.reverse()
-            rev.append(p)
-    clipper.AddPaths(st(paths_A, sc), pc.PT_SUBJECT, True)
-    clipper.AddPaths(st(paths_B, sc), pc.PT_CLIP, True)
+    clipper.AddPaths(paths_A, pc.PT_SUBJECT, True)
+    clipper.AddPaths(paths_B, pc.PT_CLIP, True)
     sp = clipper.Execute(pc.CT_INTERSECTION, pc.PFT_NONZERO, pc.PFT_NONZERO)
-    for p in rev:
-        p.reverse()
     sp = _clipper2GDS(sp)
-    return sf(sp, sc)
+    return pc.scale_from_clipper(sp, sc)
 
 
 def xor_polygons(paths_A, paths_B, accuracy=1e-8):
@@ -351,20 +366,17 @@ def xor_polygons(paths_A, paths_B, accuracy=1e-8):
         return paths_A + paths_B
     sc = 1 / accuracy
     clp = pc.Pyclipper()
-    # Ensure correct orientation (and remember so we can re-reverse, and do not
-    # change the original polygon).
-    rev = []
+    # Scale before Area() or Orientation() since they operate on integers.
+    paths_A = pc.scale_to_clipper(paths_A, sc)
+    paths_B = pc.scale_to_clipper(paths_B, sc)
     for p in paths_A + paths_B:
         if not pc.Orientation(p):
             p.reverse()
-            rev.append(p)
-    clp.AddPaths(st(paths_A, sc), pc.PT_SUBJECT, True)
-    clp.AddPaths(st(paths_B, sc), pc.PT_CLIP, True)
-    for p in rev:
-        p.reverse()
+    clp.AddPaths(paths_A, pc.PT_SUBJECT, True)
+    clp.AddPaths(paths_B, pc.PT_CLIP, True)
     xor = clp.Execute(pc.CT_XOR, pc.PFT_NONZERO, pc.PFT_NONZERO)
     xor = _clipper2GDS(xor)
-    return sf(xor, sc)
+    return pc.scale_from_clipper(xor, sc)
 
 
 def grow_polygons(paths, grow=5, accuracy=0.1, jointype="round"):
@@ -398,18 +410,15 @@ def grow_polygons(paths, grow=5, accuracy=0.1, jointype="round"):
         print("jointype should be one of 'round', 'square', 'miter'.")
         print("Using default ('round')")
         jointype = "round"
-    # Path orientation matters
-    rev = []
+    # Scale before Area() or Orientation() since they operate on integers.
+    paths = pc.scale_to_clipper(paths, sc)
     for p in paths:
         if not pc.Orientation(p):
             p.reverse()
-            rev.append(p)
-    pco.AddPaths(st(paths, sc), jt[jointype], pc.ET_CLOSEDPOLYGON)
-    for p in rev:
-        p.reverse()
+    pco.AddPaths(paths, jt[jointype], pc.ET_CLOSEDPOLYGON)
     pco = pco.Execute(grow * sc)
     pco = _clipper2GDS(pco)
-    return sf(pco, sc)
+    return pc.scale_from_clipper(pco, sc)
 
 
 polygons_AND = clip_polygons

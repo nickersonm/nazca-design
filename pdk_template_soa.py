@@ -44,7 +44,7 @@ def Tp_SOA(
     Returns:
         function that generates a Cell object
     """
-    @bbu.hashme(name, 'length', 'pads')
+    @bbu.hashme(name, ['length', 'pads'])
     def cell(length=length, pads=pads):
         """Create a SOA cell.
 

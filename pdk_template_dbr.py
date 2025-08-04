@@ -52,7 +52,7 @@ def Tp_DBR(
     Returns:
         function returning a Cell: dbr(length, pitch, duty_cycle)
     """
-    @bbu.hashme(name, 'length', 'pitch', 'duty_cycle')
+    @bbu.hashme(name, ['length', 'pitch', 'duty_cycle'])
     def cell(length=length, pitch=pitch, duty_cycle=duty_cycle):
         """Create a DBR cell.
 
@@ -110,7 +110,7 @@ def Tp_DBR2(
     Returns:
         function that generates a Cell object
     """
-    @bbu.hashme(name, 'length', 'pitch')
+    @bbu.hashme(name, ['length', 'pitch'])
     def cell(length=length, pitch=pitch, metal=metal):
         """Create a DBR cell.
 

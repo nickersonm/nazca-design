@@ -37,12 +37,14 @@ The maxiumum value for Nazca is 8190 and the current value can be found from the
 module (nd.cfg.maxpolygonpoints).
 """
 import nazca as nd
+from nazca.util import boundingbox
 from operator import itemgetter
+from itertools import groupby
+from numpy import ndarray, sqrt
 
 __all__ = ["limit_polygon_points"]
 
 
-# https://stackoverflow.com/questions/563198/how-do-you-detect-where-two-line-segments-intersect
 class Point:
     """Simple point class to keep the implementation close to the algorithm"""
 
@@ -71,21 +73,24 @@ class Point:
         return Point(self.x * t, self.y * t)
 
 
+# https://stackoverflow.com/questions/563198/how-do-you-detect-where-two-line-segments-intersect
 def intersect(a, b, c, d, firstisline=False):
     """Intersect AB with CD
 
     Args:
-        a (list): (x, y) of start of first line segment
-        b (list): (x, y) of end of first line segment
-        c (list): (x, y) of start of second line segment
-        c (list): (x, y) of end of second line segment
+        a (list): [x, y] of start of first line segment
+        b (list): [x, y] of end of first line segment
+        c (list): [x, y] of start of second line segment
+        d (list): [x, y] of end of second line segment
         firstisline (boolean): treat first segment as full line (default False)
 
     Return:
         list of length 0, 1 or 2 that contains the intersection point(s)
     """
-    eps = 1e-5  # Unit would be um or nm, so this is safe?
-    # Define vectors p, p+r and q, q+r
+    # The points will eventually be on a grid of size gds_db_unit, so a factor 100
+    # smaller is a safe value.
+    eps = nd.gds_base.gds_db_unit / 100
+    # Define vectors p, p+r and q, q+s
     p = Point(a[0], a[1])
     r = Point(b[0] - a[0], b[1] - a[1])
     q = Point(c[0], c[1])
@@ -98,19 +103,15 @@ def intersect(a, b, c, d, firstisline=False):
             t0 = (q - p).dot(r) / (r.dot(r))
             t1 = t0 + s.dot(r) / (r.dot(r))
             result = []
-            type = 0
+            kind = 0
             if firstisline or -eps < t0 < 1 + eps:
-                pi = p + r * t0
-                result.append(
-                    (pi.x, pi.y),
-                )
-                type = 1
+                result.append(list(c))
+                kind = 1
             if firstisline or -eps < t1 < 1 + eps:
-                pi = p + r * t1
-                result.append((pi.x, pi.y))
-                type = 2 + type
-            # type = 0 (no), 1 (1st point), 2 (2nd point), 3 (1st and 2nd point)
-            return type, result
+                result.append(list(d))
+                kind = 2 + kind
+            # kind = 0 (no), 1 (1st point), 2 (2nd point), 3 (1st and 2nd point)
+            return kind, result
         else:
             # Case 2: parallel, non-intersecting
             return 0, []
@@ -121,11 +122,11 @@ def intersect(a, b, c, d, firstisline=False):
             # Case 3: intersecting
             pi = p + r * t
             if abs(u) < eps:
-                return 4, [(pi.x, pi.y)]  # Starts at line (segment)
+                return 4, [[pi.x, pi.y]]  # Starts at line (segment)
             elif abs(u - 1) < eps:
-                return 5, [(pi.x, pi.y)]  # Ends at line (segment)
+                return 5, [[pi.x, pi.y]]  # Ends at line (segment)
             else:
-                return 6, [(pi.x, pi.y)]  # Intersects line (segment)
+                return 6, [[pi.x, pi.y]]  # Intersects line (segment)
         else:
             # Case 4: not parallel, not intersecting
             return 0, []
@@ -143,142 +144,120 @@ class Node(object):
 
 def polygon_split(s0, s1, p):
     """Split polygon p along the line segment s0-s1.
-    This is an implementation of the algorithm outlined by David Geier:
+    This is implementation is an adaptation of the algorithm outlined by David Geier:
     https://geidav.wordpress.com/2015/03/21/splitting-an-arbitrary-polygon-by-a-line/
     But his algorithm doesn't properly take into account coinciding points on
-    the split line. This one does.
+    the split line. This one does by removing consecutive polygon points that are on the
+    split line and only leaves sections that eventually cross the split line (LOR and
+    ROL). Only these are then used to split the polygon.
 
     Args:
         s0 (float, float): (x, y) coordinate of segment start.
         s1 (float, float): (x, y) coordinate of segment end.
-        p (list): polygon, a list of (x, y) coordinates.
+        p (list): polygon, a list (or ndarray) of (x, y) coordinates.
 
     Returns:
         list of polygons that are each a list of (x, y) coordinates.
     """
-    # To prevent modifying the original polygon, we first make a copy.
-    p = p[:]
-    # Ensure it is closed.
-    if p[0] != p[-1]:
-        p.append(p[0])
-    if nd.clipper.signed_area(p) > 0:  # Clockwise
+    eps = 1e-5
+    ds = sqrt((s0[0] - s1[0]) ** 2 + (s0[1] - s1[1]) ** 2)
+
+    if p[0] == p[-1]:  # Open polygon if closed.
+        p.pop()
+    if nd.util.signed_area(p) > 0:  # Needs to be counter clockwise
         p.reverse()
 
-    s0x, s0y = s0
-    s1x, s1y = s1
-
-    index_on_line = []  # index of edges on intersection line.
+    index_on_line = []  # index of points on intersection line.
     # Since we will modify the polygon as we go, we cannot just loop over the
     # elements, but use indices in the while loop:
-    l = len(p) - 1
+    lp = len(p)
     i = 0
-    while i < l:
+    while i < lp:
         # Candidate segments
-        type, points = intersect(s0, s1, p[i], p[i + 1], True)
-        # print(f"segment p{i}-p{i+1}: type {type}")
-        if type in {1, 3, 4}:
+        kind, points = intersect(s0, s1, p[i], p[(i + 1) % lp], True)
+        if kind in {1, 3, 4}:  # Add index of first point p[i]
             index_on_line.append(i)
-        elif type == 6:
+        elif kind == 6:  # Point is new: insert. It will be added on next iteration.
             p.insert(i + 1, points[0])
-            l += 1
+            lp += 1
         i += 1
-
+    l = len(index_on_line)
+    i = 0
+    while i < l:  # index_on_line is typically a small list.
+        # Remove consecutive points on the line.
+        if (index_on_line[i] + 1) % lp == index_on_line[(i + 1) % l]:
+            del index_on_line[i]
+            l -= 1
+        else:
+            i += 1
     # Now we'll use a linked list to represent the polygon. This is needed to
     # later be able to split off separate parts.
-    l = len(p)  # length of the updated polygon
-    # Make list of nodes (should not have the closing point)
-    node = [Node(i) for i in range(l - 1)]  # Maps the updated polygon
-    l -= 1
+    node = [Node(i) for i in range(lp)]
     # Link them
-    for i in range(l):
+    for i in range(lp):
         node[i - 1].next = node[i]
-        node[(i + 1) % l].prev = node[i]
+        node[(i + 1) % lp].prev = node[i]
         node[i].prev = node[i - 1]
-        node[i].next = node[(i + 1) % l]
+        node[i].next = node[(i + 1) % lp]
 
-    # Sort on distance from start of the dividing line segment.
+    # Distance from start of the dividing line segment is later used for sorting.
     def signed_distance(i):
-        return (p[i][0] - s0[0]) * (s1[0] - s0[0]) + (p[i][1] - s0[1]) * (s1[1] - s0[1])
+        # This is using the 2D (scalar) cross product.
+        d = (p[i][0] - s0[0]) * (s1[0] - s0[0]) + (p[i][1] - s0[1]) * (s1[1] - s0[1])
+        # s0 and s1 are ds apart. Scale such that the proper digits are significant.
+        return d / ds
 
     def lor(node):
         """Return L, O, R"""
         i = node.data
+        # This is using the dot product: left, right or on the line.
         d = (p[i][0] - s0[0]) * (s1[1] - s0[1]) - (p[i][1] - s0[1]) * (s1[0] - s0[0])
-        if d < 0:
+        if d < -eps:
             return "L"
-        if d > 0:
+        if d > eps:
             return "R"
         return "O"
 
-    # Also replace the index stored in index_on_line with a tuple:
-    # - node
-    # - signed distance
-    # - LOR
-    on_line_1 = []  # All points on intersection line
+    on_line = []  # Stores all ROL and LOR points on intersection line.
+    # We only want LOR, ROL. There can be successive points on the line. Those we will
+    # skipped until we find either "L" or "R".
     for ndx in index_on_line:
         nod = node[ndx]
-        LOR = lor(nod.prev) + "O" + lor(nod.next)
-        on_line_1.append((nod, signed_distance(ndx), LOR))
-    on_line_2 = []  # after first filter
-    for nod, d, LOR in on_line_1:
-        if LOR in {"LOR", "ROL", "OOL", "OOR", "LOO", "ROO"}:
-            on_line_2.append((nod, d, LOR))
+        lr = lor(nod.prev)
+        while lr == "O":  # Previous points: repeat until different from "O"
+            nod = nod.prev
+            lr = lor(nod.prev)
+        LOR = lr + "O"
+        lr = lor(node[ndx].next)
+        while lr == "O":  # Next points: repeat until different from "O"
+            nod = nod.next
+            lr = lor(nod.next)
+        LOR = LOR + lr
+        if LOR in {"LOR", "ROL"}:
+            # Replace the index stored in index_on_line with a tuple:
+            # - node
+            # - signed distance
+            # - LOR
+            on_line.append([node[ndx], signed_distance(ndx), LOR])
 
-    # Sort on distance.
-    on_line_2.sort(key=itemgetter(1))
-    # Special treatment for xOO-OOy and OOx-yOO: replace by LOR or ROL.
-    # Take care that ponts may be in the wrong order, when they coincide.
-    # To account for strange OOO cases, use != "L" in stead of == "R".
-    on_line = []  # Store points on interesection line
-    done = set()  # Don't store the same point twice
-    i = 0
-    while i < len(on_line_2):
-        nod, d, LOR = on_line_2[i]
-        if nod in done:
-            i += 1
-            continue
-        if "OO" not in LOR:
-            on_line.append((nod, d, LOR))
-        elif LOR == "OOL":
-            if lor(nod.prev.prev) != "L":
-                on_line.append((nod, d, "ROL"))
-                done.update({nod, nod.prev})
-        elif LOR == "ROO":
-            if lor(nod.next.next) != "R":
-                on_line.append((nod, d, "ROL"))
-                done.update({nod, nod.next})
-        elif LOR == "LOO":
-            if lor(nod.next.next) != "L":
-                done.update({nod, nod.next})
-                # Can't take from list because order might be wrong
-                nod = nod.next
-                d = signed_distance(nod.data)
-                on_line.append((nod, d, "LOR"))
-        elif LOR == "OOR":
-            if lor(nod.prev.prev) != "R":
-                done.update({nod, nod.prev})
-                # Can't take from list because order might be wrong
-                nod = nod.prev
-                d = signed_distance(nod.data)
-                on_line.append((nod, d, "LOR"))
-        i += 1
-
-    # Only LOR and ROL in on_line and they should be in pairs, LOR-ROL
+    on_line.sort(key=itemgetter(1))
+    # Only LOR and ROL in on_line and they should be in pairs, LOR-ROL, starting with
+    # LOR, because of the chosen orientation.
     lorrol = ["LOR", "ROL"]
     for i in range(len(on_line) - 1):
         node, d, LOR = on_line[i]
         if LOR != lorrol[i % 2]:
             # Not in the right order, d must be the same and swap them
-            if d == on_line[i + 1][1]:
+            # (allow a change in the last significant digit).
+            if abs(d - on_line[i + 1][1]) < eps:
                 on_line[i], on_line[i + 1] = on_line[i + 1], on_line[i]
             else:
                 raise ValueError("Self-intersecting polygon")
 
     # Now guaranteed to be correct (LOR-ROL) * N.
-    for a, b in zip(on_line[::2], on_line[1::2]):
+    for a, b in zip(on_line[::2], on_line[1::2]):  # Connection-split magic:
         src_node, dst_node = a[0], b[0]
         # Bridge source and destination
-        # print(f"Source {src_node.data}, destination {dst_node.data}")
         new_src = Node(src_node.data)  # New source node
         new_dst = Node(dst_node.data)  # New destination node
         new_src.next = dst_node
@@ -318,11 +297,19 @@ def limit_polygon_points(p, nmax=None):
     Returns:
         list of polygons, that each are a list of (x, y) values.
     """
-    todo = [p]
-    result = []
     if nmax is None:
         nmax = nd.cfg.maxpolygonpoints
     assert 3 < nmax < 8191
+    # Most polygons don't need anything. Make that fast.
+    if len(p) < nmax:
+        return [p]
+    # First cleanup the polygon by removing consecutive identical points
+    if isinstance(p, ndarray):
+        p = [v for i, v in enumerate(p) if i == 0 or (v != p[i - 1]).any()]
+    else:
+        p = [uniq[0] for uniq in groupby(p)]
+    todo = [p]
+    result = []
     while todo:
         pol = todo.pop()
         npts = len(pol)
@@ -331,17 +318,7 @@ def limit_polygon_points(p, nmax=None):
             continue
         # Find a good intersection line:
         # Split horizontal or vertical in half.
-        xmax = xmin = pol[0][0]
-        ymax = ymin = pol[0][1]
-        for x, y in pol:
-            if x > xmax:
-                xmax = x
-            elif x < xmin:
-                xmin = x
-            if y > ymax:
-                ymax = y
-            elif y < ymin:
-                ymin = y
+        xmin, ymin, xmax, ymax = boundingbox(pol)
         if xmax - xmin > ymax - ymin:  # Split vertical
             s0 = [xmin + (xmax - xmin) / 2, 0]
             s1 = [xmin + (xmax - xmin) / 2, 100]
@@ -357,3 +334,34 @@ def limit_polygon_points(p, nmax=None):
             else:
                 todo.append(p)
     return result
+
+
+def limit_polyline_points(p, nmax=None):
+    """Limit the maximum number in a polyline by splitting it into multiple
+    polylines if needed. The returned polyline(s) will have at most nmax
+    points. If nmax is not specified, then he maximum number comes from the cfg
+    module: maxpolylinepoints.
+
+    Args:
+        p (list): polyline with list of (x, y) values.
+        nmax (int): maximum number of points in resulting polyline(s).
+
+    Returns:
+        list of polylines, that each are a list of (x, y) values.
+    """
+    result = []
+    if nmax is None:
+        nmax = nd.cfg.maxpolylinepoints
+    assert 2 < nmax < 8191
+    npts = len(p)
+    # Segments should overlap (have two points in common) to avoid gaps.
+    Nsegment = int(npts / (nmax - 2)) + 1
+    # Points per segment
+    N = int(npts / Nsegment) + 1
+    for i in range(Nsegment):
+        # Start and end segment should overlap to avoid gaps.
+        start = max(i * N - 2, 0)
+        stop = min((i + 1) * N, npts)
+        result.append(p[start:stop])
+        if stop >= npts:
+            return result
